@@ -34,6 +34,21 @@ jobs:
       - name: Build plugins
         run: gradle makePluginsJson
 
+      - name: Find generated files
+        run: |
+          find . -name "*.cs3" -o -name "plugins.json" -o -name "*.apk" | head -20
+          ls -la build/ 2>/dev/null || true
+          ls -la FrenchStreamProvider/build/ 2>/dev/null || true
+
+      - name: Prepare builds directory
+        run: |
+          mkdir -p builds
+          cp -r build/* builds/ 2>/dev/null || true
+          cp -r FrenchStreamProvider/build/outputs/* builds/ 2>/dev/null || true
+          find . -name "plugins.json" -exec cp {} builds/ \;
+          find . -name "*.cs3" -exec cp {} builds/ \;
+          ls -la builds/
+
       - name: Deploy to builds branch
         uses: peaceiris/actions-gh-pages@v4
         with:
