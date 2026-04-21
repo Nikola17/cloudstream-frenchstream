@@ -31,11 +31,8 @@ jobs:
           sudo mv gradle-8.5 /opt/gradle
           sudo ln -sf /opt/gradle/bin/gradle /usr/local/bin/gradle
 
-      - name: Generate Gradle Wrapper
-        run: gradle wrapper
-
       - name: Build plugins
-        run: ./gradlew makePluginsJson
+        run: gradle makePluginsJson
 
       - name: Deploy to builds branch
         uses: peaceiris/actions-gh-pages@v4
