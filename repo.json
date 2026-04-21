@@ -1,0 +1,8 @@
+{
+  "name": "FrenchStream",
+  "description": "Addon French-Stream pour CloudStream - Films et Séries",
+  "manifestVersion": 1,
+  "pluginLists": [
+    "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/builds/plugins.json"
+  ]
+}
