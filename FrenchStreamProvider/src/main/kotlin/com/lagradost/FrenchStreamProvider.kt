@@ -49,15 +49,30 @@ class FrenchStreamProvider : MainAPI() {
                 || href.contains("/series/", ignoreCase = true)
                 || href.contains("/s-tv/", ignoreCase = true)
 
+        // Extract version badge: VF or VOSTFR
+        val versionText = element.selectFirst(".film-version")?.text() ?: ""
+        val hasVF = versionText.contains("VF", ignoreCase = true)
+        val hasVOSTFR = versionText.contains("VOSTFR", ignoreCase = true)
+
         return if (isSeries) {
             newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
                 this.posterUrl = poster
                 this.year = year
+                if (hasVF) {
+                    addDubStatus(DubStatus.Dubbed)
+                } else if (hasVOSTFR) {
+                    addDubStatus(DubStatus.Subbed)
+                }
             }
         } else {
             newMovieSearchResponse(title, href, TvType.Movie) {
                 this.posterUrl = poster
                 this.year = year
+                if (hasVF) {
+                    addDubStatus(DubStatus.Dubbed)
+                } else if (hasVOSTFR) {
+                    addDubStatus(DubStatus.Subbed)
+                }
             }
         }
     }
@@ -66,7 +81,11 @@ class FrenchStreamProvider : MainAPI() {
         "films" to "Derniers Films",
         "s-tv" to "Dernières Séries",
         "films/top-film" to "Top Films",
-        "sries-du-moment" to "Séries du moment"
+        "sries-du-moment" to "Séries du moment",
+        "s-tv/netflix-series-" to "Nouveautés Netflix",
+        "s-tv/series-disney-plus" to "Nouveautés Disney+",
+        "s-tv/series-apple-tv" to "Nouveautés Apple TV+",
+        "s-tv/serie-amazon-prime-videos" to "Nouveautés Prime Video"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
