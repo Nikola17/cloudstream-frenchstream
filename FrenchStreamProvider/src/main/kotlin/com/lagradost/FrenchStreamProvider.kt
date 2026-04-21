@@ -16,15 +16,15 @@ class FrenchStreamProvider : MainAPI() {
 
     private var isUsingFallback = false
 
-    private suspend fun safeGet(url: String): NiceResponse {
-        val response = app.get(url)
+    private suspend fun safeGet(url: String) = app.get(url).let { response ->
         if (!response.isSuccessful && !isUsingFallback) {
             isUsingFallback = true
             mainUrl = fallbackUrl
             val fallbackFullUrl = url.replace("https://french-stream.pink", fallbackUrl)
-            return app.get(fallbackFullUrl)
+            app.get(fallbackFullUrl)
+        } else {
+            response
         }
-        return response
     }
 
     private fun toResult(element: Element): SearchResponse? {
