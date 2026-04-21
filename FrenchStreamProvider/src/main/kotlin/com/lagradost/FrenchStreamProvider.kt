@@ -5,7 +5,6 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 import org.json.JSONObject
 import org.jsoup.nodes.Element
-import java.util.EnumSet
 
 class FrenchStreamProvider : MainAPI() {
     override var mainUrl = "https://french-stream.pink"
@@ -55,29 +54,21 @@ class FrenchStreamProvider : MainAPI() {
         val hasVF = versionText.contains("VF", ignoreCase = true)
         val hasVOSTFR = versionText.contains("VOSTFR", ignoreCase = true)
 
+        val badge = when {
+            hasVF -> " [VF]"
+            hasVOSTFR -> " [VOST]"
+            else -> ""
+        }
+
         return if (isSeries) {
-            newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
+            newTvSeriesSearchResponse(title + badge, href, TvType.TvSeries) {
                 this.posterUrl = poster
                 this.year = year
-                this.dubStatus = if (hasVF) {
-                    EnumSet.of(DubStatus.Dubbed)
-                } else if (hasVOSTFR) {
-                    EnumSet.of(DubStatus.Subbed)
-                } else {
-                    null
-                }
             }
         } else {
-            newMovieSearchResponse(title, href, TvType.Movie) {
+            newMovieSearchResponse(title + badge, href, TvType.Movie) {
                 this.posterUrl = poster
                 this.year = year
-                this.dubStatus = if (hasVF) {
-                    EnumSet.of(DubStatus.Dubbed)
-                } else if (hasVOSTFR) {
-                    EnumSet.of(DubStatus.Subbed)
-                } else {
-                    null
-                }
             }
         }
     }
