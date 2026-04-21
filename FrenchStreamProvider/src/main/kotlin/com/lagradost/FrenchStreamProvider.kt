@@ -5,6 +5,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 import org.json.JSONObject
 import org.jsoup.nodes.Element
+import java.util.EnumSet
 
 class FrenchStreamProvider : MainAPI() {
     override var mainUrl = "https://french-stream.pink"
@@ -58,20 +59,24 @@ class FrenchStreamProvider : MainAPI() {
             newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
                 this.posterUrl = poster
                 this.year = year
-                if (hasVF) {
-                    addDubStatus(DubStatus.Dubbed)
+                this.dubStatus = if (hasVF) {
+                    EnumSet.of(DubStatus.Dubbed)
                 } else if (hasVOSTFR) {
-                    addDubStatus(DubStatus.Subbed)
+                    EnumSet.of(DubStatus.Subbed)
+                } else {
+                    null
                 }
             }
         } else {
             newMovieSearchResponse(title, href, TvType.Movie) {
                 this.posterUrl = poster
                 this.year = year
-                if (hasVF) {
-                    addDubStatus(DubStatus.Dubbed)
+                this.dubStatus = if (hasVF) {
+                    EnumSet.of(DubStatus.Dubbed)
                 } else if (hasVOSTFR) {
-                    addDubStatus(DubStatus.Subbed)
+                    EnumSet.of(DubStatus.Subbed)
+                } else {
+                    null
                 }
             }
         }
