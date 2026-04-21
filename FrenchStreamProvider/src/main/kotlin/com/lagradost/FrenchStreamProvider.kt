@@ -3,6 +3,7 @@ package com.lagradost
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
+import org.json.JSONObject
 import org.jsoup.nodes.Element
 
 class FrenchStreamProvider : MainAPI() {
@@ -25,6 +26,11 @@ class FrenchStreamProvider : MainAPI() {
         } else {
             response
         }
+    }
+
+    /** Extract numeric ID from URL like /15126665-basic-psych.html */
+    private fun extractContentId(url: String): String? {
+        return Regex("""/([0-9]+)-[^/]+\.html""").find(url)?.groupValues?.get(1)
     }
 
     private fun toResult(element: Element): SearchResponse? {
@@ -85,8 +91,8 @@ class FrenchStreamProvider : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         val doc = safeGet(url).document
-        val title = doc.selectFirst("h1#s-title")?.text()
-            ?: doc.selectFirst("h1")?.text()
+        val title = doc.selectFirst("h1#s-title")?.text()?.trim()
+            ?: doc.selectFirst("h1")?.text()?.trim()
             ?: "Unknown"
 
         var poster = fixUrlNull(doc.selectFirst("div.fposter img")?.attr("src"))
@@ -105,10 +111,13 @@ class FrenchStreamProvider : MainAPI() {
         val tags = doc.select("ul.flist-col li a").mapNotNull { it.text() }
 
         val isSeries = title.contains("saison", ignoreCase = true)
-                || doc.select("div.elink").isNotEmpty()
+                || doc.select("div.episodes-wrapper").isNotEmpty()
+                || doc.select("#sv-cfg").isNotEmpty()
 
         if (!isSeries) {
-            return newMovieLoadResponse(title, url, TvType.Movie, url) {
+            val contentId = extractContentId(url) ?: url
+            val apiUrl = "$mainUrl/engine/ajax/film_api.php?id=$contentId"
+            return newMovieLoadResponse(title, url, TvType.Movie, apiUrl) {
                 this.posterUrl = poster
                 this.plot = description
                 this.year = year
@@ -116,35 +125,54 @@ class FrenchStreamProvider : MainAPI() {
             }
         }
 
-        val episodeLists = doc.select("div.elink")
+        // Series: fetch episodes from API
+        val newsId = doc.selectFirst("#sv-cfg")?.attr("data-news-id")
+            ?: extractContentId(url)
+            ?: return newMovieLoadResponse(title, url, TvType.Movie, url) {
+                this.posterUrl = poster
+                this.plot = description
+                this.year = year
+                this.tags = tags
+            }
+
+        val apiUrl = "$mainUrl/ep-data.php?id=$newsId"
+        val apiResponse = safeGet(apiUrl).text
+        val json = JSONObject(apiResponse)
+
         val vfEpisodes = mutableListOf<Episode>()
         val vostfrEpisodes = mutableListOf<Episode>()
 
-        // VF — premier bloc
-        episodeLists.firstOrNull()?.select("a")?.forEachIndexed { index, a ->
-            val epNum = a.text().substringAfter("Episode").trim().toIntOrNull() ?: (index + 1)
-            val data = fixUrl(url).plus("-episodenumber:$epNum")
-            vfEpisodes.add(newEpisode(data) {
-                name = "Épisode $epNum VF"
-                episode = epNum
-                season = 1
-            })
-        }
-
-        // VOSTFR — deuxième bloc s'il existe
-        if (episodeLists.size > 1) {
-            episodeLists[1].select("a").forEachIndexed { index, a ->
-                val epNum = a.text().substringAfter("Episode").trim().toIntOrNull() ?: (index + 1)
-                val data = fixUrl(url).plus("-episodenumber:$epNum")
-                vostfrEpisodes.add(newEpisode(data) {
-                    name = "Épisode $epNum VOSTFR"
-                    episode = epNum
-                    season = 2
-                })
+        if (json.has("vf") && !json.isNull("vf")) {
+            val vfObj = json.getJSONObject("vf")
+            vfObj.keys().forEach { epNumStr ->
+                val epNum = epNumStr.toIntOrNull() ?: 0
+                if (epNum > 0) {
+                    val data = "$mainUrl/ep-data.php?id=$newsId|ep=$epNum|lang=vf"
+                    vfEpisodes.add(newEpisode(data) {
+                        name = "Épisode $epNum VF"
+                        episode = epNum
+                        season = 1
+                    })
+                }
             }
         }
 
-        val allEpisodes = (vfEpisodes + vostfrEpisodes).filter { it.data.isNotBlank() }
+        if (json.has("vostfr") && !json.isNull("vostfr")) {
+            val vostfrObj = json.getJSONObject("vostfr")
+            vostfrObj.keys().forEach { epNumStr ->
+                val epNum = epNumStr.toIntOrNull() ?: 0
+                if (epNum > 0) {
+                    val data = "$mainUrl/ep-data.php?id=$newsId|ep=$epNum|lang=vostfr"
+                    vostfrEpisodes.add(newEpisode(data) {
+                        name = "Épisode $epNum VOSTFR"
+                        episode = epNum
+                        season = 2
+                    })
+                }
+            }
+        }
+
+        val allEpisodes = (vfEpisodes + vostfrEpisodes).sortedBy { it.episode }
 
         return newTvSeriesLoadResponse(title, url, TvType.TvSeries, allEpisodes) {
             this.posterUrl = poster
@@ -161,33 +189,46 @@ class FrenchStreamProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val isEpisode = data.contains("-episodenumber:")
-        val pageUrl = if (isEpisode) data.split("-episodenumber:")[0] else data
-        val doc = safeGet(pageUrl).document
+        val links = mutableListOf<String>()
 
-        val links = if (isEpisode) {
-            val wantedEpisode = data.split("-episodenumber:")[1]
-            val episodeId = if (wantedEpisode == "1") "episode1" else "episode${wantedEpisode.toInt() + 32}"
-            val divSelector = if (wantedEpisode == "1") "> div.tabs-sel " else ""
-            doc.select("div#$episodeId > div.selink > ul.btnss $divSelector> li a")
-                .mapNotNull { fixUrlNull(it.attr("href")) }
-                .filter { it.isNotBlank() }
-        } else {
-            doc.select("nav#primary_nav_wrap > ul > li > ul > li > a")
-                .mapNotNull { fixUrlNull(it.attr("href")) }
-                .filter { it.isNotBlank() }
+        if (data.contains("film_api.php")) {
+            // Movie: call film_api.php
+            val response = safeGet(data).text
+            val json = JSONObject(response)
+            if (json.has("players") && !json.isNull("players")) {
+                val players = json.getJSONObject("players")
+                players.keys().forEach { playerName ->
+                    val playerObj = players.getJSONObject(playerName)
+                    if (playerObj.has("default")) {
+                        val url = playerObj.getString("default")
+                        if (url.isNotBlank()) links.add(url)
+                    }
+                }
+            }
+        } else if (data.contains("ep-data.php")) {
+            // Series: parse data, call ep-data.php, extract episode links
+            val parts = data.split("|")
+            val apiUrl = parts[0]
+            val epNum = parts.find { it.startsWith("ep=") }?.substringAfter("ep=") ?: return false
+            val lang = parts.find { it.startsWith("lang=") }?.substringAfter("lang=") ?: "vf"
+
+            val response = safeGet(apiUrl).text
+            val json = JSONObject(response)
+            if (json.has(lang) && !json.isNull(lang)) {
+                val langObj = json.getJSONObject(lang)
+                if (langObj.has(epNum)) {
+                    val epObj = langObj.getJSONObject(epNum)
+                    epObj.keys().forEach { hoster ->
+                        val url = epObj.getString(hoster)
+                        if (url.isNotBlank()) links.add(url)
+                    }
+                }
+            }
         }
 
-        if (links.isEmpty()) {
-            // Fallback de parsing si la structure change légèrement
-            val altLinks = doc.select("div.selink a, div.fsctab a, .fplayer a")
-                .mapNotNull { fixUrlNull(it.attr("href")) }
-                .filter { it.isNotBlank() }
-            altLinks.forEach { loadExtractor(it, subtitleCallback, callback) }
-            return altLinks.isNotEmpty()
-        }
+        if (links.isEmpty()) return false
 
         links.forEach { loadExtractor(it, subtitleCallback, callback) }
-        return links.isNotEmpty()
+        return true
     }
 }
