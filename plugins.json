@@ -1,5 +1,21 @@
 [
     {
+        "fileHash": "sha256-bba2b10323a1d7348a283309ac1ca0ed3622c2329567d02df486bd9aef64ae06",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/Nikola17/cloudstream-frenchstream",
+        "fileSize": 22016,
+        "status": 3,
+        "language": "fr",
+        "authors": [
+            "Nico"
+        ],
+        "version": 1,
+        "internalName": "FilmoFlix",
+        "description": "FilmoFlix provider for CloudStream",
+        "url": "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/builds/FilmoFlix.cs3",
+        "name": "FilmoFlix"
+    },
+    {
         "fileHash": "sha256-80194d4c4b900896fbf8f72d522d277a01d9d1d906bc053ec8ec9ed1b4103a9e",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Nikola17/cloudstream-frenchstream",
