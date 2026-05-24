@@ -1,12 +1,13 @@
-# FrenchStream Addon for CloudStream
+# Addons CloudStream FR
 
-Addon CloudStream permettant d'accéder aux films et séries de **French-Stream**.
+Repo CloudStream contenant des providers FR, dont **French-Stream** et **FilmoFlix**.
 
 ## Fonctionnalités
 
 - Films et Séries TV
 - Recherche intégrée
-- Fallback automatique d'URL (`french-stream.pink` → `fstream.info`)
+- Catalogues par catégories
+- Fallback automatique d'URL pour les miroirs supportés
 - Episodes VF et VOSTFR pour les séries
 
 ## Installation
@@ -17,14 +18,16 @@ Addon CloudStream permettant d'accéder aux films et séries de **French-Stream*
    ```
    https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/main/repo.json
    ```
+4. Rechercher **FilmoFlix** dans les extensions CloudStream.
 
 ## Build
 
 ```bash
 ./gradlew :FrenchStreamProvider:build
+./gradlew :FilmoFlix:build
 ```
 
 ## URLs supportées
 
-- Primaire : `https://french-stream.pink`
-- Fallback : `https://fstream.info`
+- French-Stream : `https://french-stream.pink`, `https://fstream.info`
+- FilmoFlix : `https://filmoflix.support`, `https://filmoflix.markets`, `https://filmoflix.money`, `https://filmoflix.lifestyle`

@@ -1,2 +1,3 @@
-rootProject.name = "FrenchStreamAddon"
+rootProject.name = "CloudStreamFrenchAddons"
 include("FrenchStreamProvider")
+include("FilmoFlix")
