@@ -32,3 +32,4 @@ Repo CloudStream contenant des providers FR, dont **French-Stream** et **FilmoFl
 - French-Stream : `https://french-stream.pink`, `https://fstream.info`
 - FilmoFlix : `https://filmoflix.support`, `https://filmoflix.delivery`, `https://filmoflix.markets`, `https://filmoflix.money`, `https://filmoflix.lifestyle`
   - Si les domaines changent, le provider tente de récupérer l'adresse officielle depuis `https://portail.lol/`.
+  - Les lecteurs FilmoFlix peuvent être bloqués si le site impose un captcha Turnstile avant de renvoyer l'iframe.

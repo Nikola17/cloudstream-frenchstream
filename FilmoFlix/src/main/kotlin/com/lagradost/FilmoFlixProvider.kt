@@ -1,6 +1,7 @@
 package com.lagradost
 
 import com.lagradost.cloudstream3.Episode
+import com.lagradost.cloudstream3.ErrorLoadingException
 import com.lagradost.cloudstream3.HomePageList
 import com.lagradost.cloudstream3.HomePageResponse
 import com.lagradost.cloudstream3.LoadResponse
@@ -340,6 +341,7 @@ class FilmoFlixProvider : MainAPI() {
             .toList()
 
         var found = false
+        var captchaBlocked = false
         entries.forEach { values ->
             val body = app.post(
                 "$mainUrl/engine/ajax/controller.php?mod=getxfield",
@@ -353,6 +355,11 @@ class FilmoFlixProvider : MainAPI() {
                 headers = mapOf("X-Requested-With" to "XMLHttpRequest")
             ).text
 
+            if (body.trim() == "captcha_error") {
+                captchaBlocked = true
+                return@forEach
+            }
+
             Regex("""(?:src|data-src)=["']([^"']+)["']""").findAll(body).forEach { match ->
                 val link = match.groupValues[1]
                 if (link.startsWith("http", ignoreCase = true)) {
@@ -360,6 +367,10 @@ class FilmoFlixProvider : MainAPI() {
                     found = true
                 }
             }
+        }
+
+        if (!found && captchaBlocked) {
+            throw ErrorLoadingException("FilmoFlix demande maintenant un captcha Turnstile pour afficher les lecteurs.")
         }
 
         return found
