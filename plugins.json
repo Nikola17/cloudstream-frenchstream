@@ -1,21 +1,5 @@
 [
     {
-        "fileHash": "sha256-044c1978c2ed6c98768bea342118f3ab7a311c4dc6e67a6870a672a74687af30",
-        "apiVersion": 1,
-        "repositoryUrl": "https://github.com/Nikola17/cloudstream-frenchstream",
-        "fileSize": 24750,
-        "status": 3,
-        "language": "fr",
-        "authors": [
-            "Nico"
-        ],
-        "version": 3,
-        "internalName": "FilmoFlix",
-        "description": "FilmoFlix provider for CloudStream",
-        "url": "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/builds/FilmoFlix.cs3",
-        "name": "FilmoFlix"
-    },
-    {
         "fileHash": "sha256-80194d4c4b900896fbf8f72d522d277a01d9d1d906bc053ec8ec9ed1b4103a9e",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Nikola17/cloudstream-frenchstream",
@@ -30,5 +14,21 @@
         "description": "French-Stream provider for CloudStream",
         "url": "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/builds/FrenchStreamProvider.cs3",
         "name": "FrenchStreamProvider"
+    },
+    {
+        "fileHash": "sha256-2b4d9e2fd41de9087af94d059c3557251ee923823794d6cde97fe11de01ed71c",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/Nikola17/cloudstream-frenchstream",
+        "fileSize": 21851,
+        "status": 3,
+        "language": "fr",
+        "authors": [
+            "Nico"
+        ],
+        "version": 1,
+        "internalName": "Movix",
+        "description": "Movix provider for CloudStream",
+        "url": "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/builds/Movix.cs3",
+        "name": "Movix"
     }
 ]
