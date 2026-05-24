@@ -33,8 +33,11 @@ class FilmoFlixProvider : MainAPI() {
     override var lang = "fr"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
+    private val portalUrl = "https://portail.lol"
+
     private val mirrors = listOf(
         "https://filmoflix.support",
+        "https://filmoflix.delivery",
         "https://filmoflix.markets",
         "https://filmoflix.money",
         "https://filmoflix.lifestyle"
@@ -91,11 +94,51 @@ class FilmoFlixProvider : MainAPI() {
         return fixed.replace(Regex("""https://filmoflix\.[^/]+"""), base)
     }
 
-    private suspend fun safeGet(url: String) = app.get(rebaseUrl(url)).let { response ->
-        if (response.isSuccessful) {
+    private suspend fun refreshMainUrlFromPortal(): String? {
+        val portal = try {
+            app.get(portalUrl)
+        } catch (_: Exception) {
+            return null
+        }
+        if (!portal.isSuccessful) return null
+
+        val href = portal.document.select("a[href*=filmoflix.]")
+            .mapNotNull { it.attr("href").takeIf { link -> link.startsWith("http", ignoreCase = true) } }
+            .firstOrNull()
+            ?: Regex("""https://filmoflix\.[a-z0-9.-]+""", RegexOption.IGNORE_CASE)
+                .find(portal.text)
+                ?.value
+
+        val discovered = href?.trimEnd('/')
+        val resolved = discovered?.let { candidate ->
+            try {
+                val probe = app.get("$candidate/film/")
+                Regex("""https://filmoflix\.[a-z0-9.-]+""", RegexOption.IGNORE_CASE)
+                    .find(probe.text)
+                    ?.value
+                    ?.trimEnd('/')
+                    ?: candidate
+            } catch (_: Exception) {
+                candidate
+            }
+        }
+        if (!resolved.isNullOrBlank()) {
+            mainUrl = resolved
+        }
+        return resolved
+    }
+
+    private suspend fun safeGet(url: String) = try {
+        app.get(rebaseUrl(url))
+    } catch (_: Exception) {
+        null
+    }.let { response ->
+        if (response?.isSuccessful == true) {
             response
         } else {
-            val fallback = mirrors.firstOrNull { it != mainUrl } ?: mainUrl
+            val fallback = refreshMainUrlFromPortal()
+                ?: mirrors.firstOrNull { it != mainUrl }
+                ?: mainUrl
             mainUrl = fallback
             app.get(rebaseUrl(url, fallback))
         }
@@ -268,6 +311,18 @@ class FilmoFlixProvider : MainAPI() {
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val primary = loadLinksFromPage(data, subtitleCallback, callback)
+        if (primary) return true
+
+        val liveUrl = refreshMainUrlFromPortal() ?: return false
+        return loadLinksFromPage(rebaseUrl(data, liveUrl), subtitleCallback, callback)
+    }
+
+    private suspend fun loadLinksFromPage(
+        data: String,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {

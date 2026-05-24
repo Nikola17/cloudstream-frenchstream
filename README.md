@@ -30,4 +30,5 @@ Repo CloudStream contenant des providers FR, dont **French-Stream** et **FilmoFl
 ## URLs supportées
 
 - French-Stream : `https://french-stream.pink`, `https://fstream.info`
-- FilmoFlix : `https://filmoflix.support`, `https://filmoflix.markets`, `https://filmoflix.money`, `https://filmoflix.lifestyle`
+- FilmoFlix : `https://filmoflix.support`, `https://filmoflix.delivery`, `https://filmoflix.markets`, `https://filmoflix.money`, `https://filmoflix.lifestyle`
+  - Si les domaines changent, le provider tente de récupérer l'adresse officielle depuis `https://portail.lol/`.
