@@ -1,6 +1,6 @@
 {
   "name": "CloudStream FR",
-  "description": "Addons CloudStream FR - French-Stream et FilmoFlix",
+  "description": "Addons CloudStream FR - French-Stream et Movix",
   "manifestVersion": 1,
   "pluginLists": [
     "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/builds/plugins.json"

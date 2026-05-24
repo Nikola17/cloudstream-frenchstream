@@ -1,6 +1,6 @@
 # Addons CloudStream FR
 
-Repo CloudStream contenant des providers FR, dont **French-Stream** et **FilmoFlix**.
+Repo CloudStream contenant des providers FR, dont **French-Stream** et **Movix**.
 
 ## Fonctionnalités
 
@@ -18,18 +18,18 @@ Repo CloudStream contenant des providers FR, dont **French-Stream** et **FilmoFl
    ```
    https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/main/repo.json
    ```
-4. Rechercher **FilmoFlix** dans les extensions CloudStream.
+4. Rechercher **Movix** dans les extensions CloudStream.
 
 ## Build
 
 ```bash
 ./gradlew :FrenchStreamProvider:build
-./gradlew :FilmoFlix:build
+./gradlew :Movix:build
 ```
 
 ## URLs supportées
 
 - French-Stream : `https://french-stream.pink`, `https://fstream.info`
-- FilmoFlix : `https://filmoflix.support`, `https://filmoflix.delivery`, `https://filmoflix.markets`, `https://filmoflix.money`, `https://filmoflix.lifestyle`
-  - Si les domaines changent, le provider tente de récupérer l'adresse officielle depuis `https://portail.lol/`.
-  - Les lecteurs FilmoFlix peuvent être bloqués si le site impose un captcha Turnstile avant de renvoyer l'iframe.
+- Movix : `https://movix.tax`, `https://movix.cash`
+  - Si les domaines changent, le provider tente de récupérer l'adresse officielle depuis `https://movix.health/`.
+  - Les catalogues Movix utilisent TMDB, comme le site Movix, et les lecteurs utilisent le fallback Frembed public.
