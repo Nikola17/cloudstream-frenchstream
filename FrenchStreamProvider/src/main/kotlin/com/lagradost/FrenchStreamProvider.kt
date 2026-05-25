@@ -1,9 +1,12 @@
 package com.lagradost
 
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.JsUnpacker
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import java.net.URI
 import org.json.JSONObject
 import org.jsoup.nodes.Element
 
@@ -21,6 +24,15 @@ class FrenchStreamProvider : MainAPI() {
         """sources:.*?["'](https?://[^"']+)["']""",
         RegexOption.DOT_MATCHES_ALL
     )
+    private val directVideoRegex = Regex(
+        """https?://[^"'\\\s<>]+?\.(?:m3u8|mp4)(?:\?[^"'\\\s<>]*)?""",
+        RegexOption.IGNORE_CASE
+    )
+    private val packedScriptRegex = Regex(
+        """eval\(function\(p,a,c,k,e,d\).*?</script>""",
+        RegexOption.DOT_MATCHES_ALL
+    )
+    private val externalHeaders = mapOf("User-Agent" to "Mozilla/5.0")
 
     private suspend fun safeGet(url: String) = app.get(url).let { response ->
         if (!response.isSuccessful && !isUsingFallback) {
@@ -115,11 +127,65 @@ class FrenchStreamProvider : MainAPI() {
         return true
     }
 
+    private fun sourceNameFromUrl(url: String): String {
+        val host = runCatching { URI(url).host.orEmpty() }.getOrDefault("").lowercase()
+        return when {
+            "fsvid" in host -> "Fsvid"
+            "uqload" in host -> "Uqload"
+            "vidzy" in host -> "Vidzy"
+            "kokoflix" in host -> "Kokoflix"
+            else -> host.substringBefore('.').replaceFirstChar { it.uppercase() }.ifBlank { "French-Stream" }
+        }
+    }
+
+    private fun extractDirectVideoUrl(html: String): String? {
+        directVideoRegex.find(html)?.value?.let { return it }
+
+        val packedScripts = packedScriptRegex.findAll(html).map { it.value }.toList()
+        for (packed in packedScripts) {
+            val unpacked = runCatching {
+                JsUnpacker(packed).takeIf { it.detect() }?.unpack()
+            }.getOrNull()
+            directVideoRegex.find(unpacked ?: continue)?.value?.let { return it }
+        }
+
+        val unpackedPage = runCatching {
+            JsUnpacker(html).takeIf { it.detect() }?.unpack()
+        }.getOrNull()
+        return directVideoRegex.find(unpackedPage ?: return null)?.value
+    }
+
+    private suspend fun loadDirectPackedHost(
+        url: String,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val response = runCatching {
+            app.get(url, headers = externalHeaders, referer = mainUrl).text
+        }.getOrNull() ?: return false
+        val directUrl = extractDirectVideoUrl(response) ?: return false
+        val sourceName = sourceNameFromUrl(url)
+        val type = if (directUrl.contains(".m3u8", ignoreCase = true)) {
+            ExtractorLinkType.M3U8
+        } else {
+            ExtractorLinkType.VIDEO
+        }
+
+        callback(newExtractorLink(sourceName, sourceName, directUrl, type) {
+            referer = url
+            headers = externalHeaders + mapOf("Referer" to url)
+        })
+        return true
+    }
+
     private suspend fun loadHostedLink(
         url: String,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        if (loadDirectPackedHost(url, callback)) {
+            return true
+        }
+
         val normalized = normalizeExtractorUrl(url)
         if (runCatching { loadExtractor(normalized, subtitleCallback, callback) }.getOrDefault(false)) {
             return true
