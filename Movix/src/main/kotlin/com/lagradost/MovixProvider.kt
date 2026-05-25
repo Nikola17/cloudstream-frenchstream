@@ -22,6 +22,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.URI
 import java.net.URLEncoder
 
 class MovixProvider : MainAPI() {
@@ -111,12 +112,17 @@ class MovixProvider : MainAPI() {
         return (0 until length()).mapNotNull { optJSONObject(it) }
     }
 
-    private fun mediaData(type: String, id: Int): String = "movix://$type/$id"
+    private fun mediaUrl(type: String, id: Int): String = "$mainUrl/$type/$id"
 
-    private fun episodeData(id: Int, season: Int, episode: Int): String = "movix://tv/$id/$season/$episode"
+    private fun episodeData(id: Int, season: Int, episode: Int): String = "$mainUrl/tv/$id/$season/$episode"
 
     private fun parseData(data: String): List<String> {
-        return data.removePrefix("movix://").trim('/').split('/').filter { it.isNotBlank() }
+        val path = if (data.contains("movix://")) {
+            data.substringAfter("movix://")
+        } else {
+            runCatching { URI(data).path ?: data }.getOrDefault(data)
+        }
+        return path.trim('/').split('/').filter { it.isNotBlank() }
     }
 
     private suspend fun getMovixApi(path: String): JSONObject {
@@ -126,18 +132,22 @@ class MovixProvider : MainAPI() {
     private fun addPlayerLinks(target: MutableList<String>, parent: JSONObject?) {
         if (parent == null) return
 
-        parent.optString("iframe_src")
-            .takeIf { it.startsWith("http", ignoreCase = true) }
-            ?.let { target.add(it) }
-
-        val players = parent.optJSONArray("player_links") ?: return
-        for (index in 0 until players.length()) {
-            val player = players.optJSONObject(index) ?: continue
-            listOf("decoded_url", "clone_url").forEach { key ->
-                player.optString(key)
-                    .takeIf { it.startsWith("http", ignoreCase = true) }
-                    ?.let { target.add(it) }
+        val players = parent.optJSONArray("player_links")
+        if (players != null) {
+            for (index in 0 until players.length()) {
+                val player = players.optJSONObject(index) ?: continue
+                listOf("decoded_url", "clone_url").forEach { key ->
+                    player.optString(key)
+                        .takeIf { it.startsWith("http", ignoreCase = true) }
+                        ?.let { target.add(it) }
+                }
             }
+        }
+
+        if (target.isEmpty()) {
+            parent.optString("iframe_src")
+                .takeIf { it.startsWith("http", ignoreCase = true) }
+                ?.let { target.add(it) }
         }
     }
 
@@ -184,12 +194,12 @@ class MovixProvider : MainAPI() {
         )
 
         return if (mediaType == "movie") {
-            newMovieSearchResponse(title, mediaData("movie", id), TvType.Movie) {
+            newMovieSearchResponse(title, mediaUrl("movie", id), TvType.Movie) {
                 posterUrl = poster
                 this.year = releaseYear
             }
         } else {
-            newTvSeriesSearchResponse(title, mediaData("tv", id), TvType.TvSeries) {
+            newTvSeriesSearchResponse(title, mediaUrl("tv", id), TvType.TvSeries) {
                 posterUrl = poster
                 this.year = releaseYear
             }
@@ -280,7 +290,7 @@ class MovixProvider : MainAPI() {
             it.optString("name").takeIf { tag -> tag.isNotBlank() }
         } ?: emptyList()
 
-        return newMovieLoadResponse(title, "$mainUrl/movie/$id", TvType.Movie, mediaData("movie", id)) {
+        return newMovieLoadResponse(title, mediaUrl("movie", id), TvType.Movie, mediaUrl("movie", id)) {
             posterUrl = image(details.optString("poster_path"))
             backgroundPosterUrl = image(details.optString("backdrop_path"), "w1280")
             year = year(details.optString("release_date"))

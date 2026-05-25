@@ -3,6 +3,7 @@ package com.lagradost
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.newExtractorLink
 import org.json.JSONObject
 import org.jsoup.nodes.Element
 
@@ -16,6 +17,10 @@ class FrenchStreamProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
     private var isUsingFallback = false
+    private val uqloadSourceRegex = Regex(
+        """sources:.*?["'](https?://[^"']+)["']""",
+        RegexOption.DOT_MATCHES_ALL
+    )
 
     private suspend fun safeGet(url: String) = app.get(url).let { response ->
         if (!response.isSuccessful && !isUsingFallback) {
@@ -73,6 +78,59 @@ class FrenchStreamProvider : MainAPI() {
                 this.year = year
             }
         }
+    }
+
+    private fun normalizeExtractorUrl(url: String): String {
+        return url.trim()
+            .replace("http://uqload.is/", "https://uqload.cx/")
+            .replace("https://uqload.is/", "https://uqload.cx/")
+            .replace("http://www.uqload.is/", "https://uqload.cx/")
+            .replace("https://www.uqload.is/", "https://uqload.cx/")
+            .replace("http://vidmoly.me/", "https://vidmoly.me/")
+    }
+
+    private fun extractorPriority(url: String): Int {
+        val lower = url.lowercase()
+        return when {
+            "uqload." in lower -> 0
+            "lulustream." in lower -> 1
+            "vidoza." in lower -> 2
+            "voe." in lower -> 3
+            "goodstream." in lower -> 4
+            "vidmoly." in lower -> 5
+            "wishonly." in lower -> 6
+            else -> 50
+        }
+    }
+
+    private suspend fun loadUqloadDirect(
+        url: String,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val response = runCatching { app.get(url, referer = mainUrl).text }.getOrNull() ?: return false
+        val directUrl = uqloadSourceRegex.find(response)?.groupValues?.getOrNull(1) ?: return false
+        callback(newExtractorLink("Uqload", "Uqload", directUrl) {
+            referer = "https://uqload.is/"
+        })
+        return true
+    }
+
+    private suspend fun loadHostedLink(
+        url: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val normalized = normalizeExtractorUrl(url)
+        if (runCatching { loadExtractor(normalized, subtitleCallback, callback) }.getOrDefault(false)) {
+            return true
+        }
+        if (normalized != url && runCatching { loadExtractor(url, subtitleCallback, callback) }.getOrDefault(false)) {
+            return true
+        }
+        if (url.contains("uqload.is", ignoreCase = true)) {
+            return loadUqloadDirect(url, callback)
+        }
+        return false
     }
 
     override val mainPage = mainPageOf(
@@ -245,7 +303,14 @@ class FrenchStreamProvider : MainAPI() {
 
         if (links.isEmpty()) return false
 
-        links.forEach { loadExtractor(it, subtitleCallback, callback) }
-        return true
+        var found = false
+        links.distinct()
+            .sortedBy { extractorPriority(it) }
+            .forEach { link ->
+                if (loadHostedLink(link, subtitleCallback, callback)) {
+                    found = true
+                }
+            }
+        return found
     }
 }
