@@ -28,16 +28,18 @@ class FrenchStreamProvider : MainAPI() {
         }
     }
 
-    /** Extract numeric ID from URL like /15126665-basic-psych.html */
+    /** Extract numeric ID from URLs like /15126665-title.html or /index.php?newsid=15126665 */
     private fun extractContentId(url: String): String? {
-        return Regex("""/([0-9]+)-[^/]+\.html""").find(url)?.groupValues?.get(1)
+        return Regex("""[?&]newsid=([0-9]+)""").find(url)?.groupValues?.get(1)
+            ?: Regex("""/([0-9]+)-[^/]+\.html""").find(url)?.groupValues?.get(1)
     }
 
     private fun toResult(element: Element): SearchResponse? {
         val anchor = element.selectFirst("a.short-poster") ?: element.selectFirst("a") ?: return null
         val href = fixUrl(anchor.attr("href"))
         val title = element.selectFirst(".short-title")?.text()
-            ?: anchor.attr("title")
+            ?: anchor.attr("title").takeIf { it.isNotBlank() }
+            ?: anchor.attr("alt").takeIf { it.isNotBlank() }
             ?: return null
         var poster = fixUrlNull(element.selectFirst("img")?.attr("src"))
         if (poster == null || poster.startsWith("data:")) {

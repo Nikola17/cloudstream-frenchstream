@@ -34,9 +34,15 @@ class MovixProvider : MainAPI() {
 
     private val healthUrl = "https://movix.health"
     private val mirrors = listOf("https://movix.tax", "https://movix.cash")
+    private val movixApiUrl = "https://api.movix.tax"
     private val tmdbApi = "https://api.themoviedb.org/3"
     private val tmdbKey = "f3d757824f08ea2cff45eb8f47ca3a1e"
     private val imageBase = "https://image.tmdb.org/t/p"
+    private val movixHeaders = mapOf(
+        "Origin" to "https://movix.tax",
+        "Referer" to "https://movix.tax/",
+        "User-Agent" to "Mozilla/5.0"
+    )
 
     override val mainPage = mainPageOf(
         "movie/popular" to "Films populaires",
@@ -111,6 +117,28 @@ class MovixProvider : MainAPI() {
 
     private fun parseData(data: String): List<String> {
         return data.removePrefix("movix://").trim('/').split('/').filter { it.isNotBlank() }
+    }
+
+    private suspend fun getMovixApi(path: String): JSONObject {
+        return JSONObject(app.get("$movixApiUrl/${path.trimStart('/')}", headers = movixHeaders).text)
+    }
+
+    private fun addPlayerLinks(target: MutableList<String>, parent: JSONObject?) {
+        if (parent == null) return
+
+        parent.optString("iframe_src")
+            .takeIf { it.startsWith("http", ignoreCase = true) }
+            ?.let { target.add(it) }
+
+        val players = parent.optJSONArray("player_links") ?: return
+        for (index in 0 until players.length()) {
+            val player = players.optJSONObject(index) ?: continue
+            listOf("decoded_url", "clone_url").forEach { key ->
+                player.optString(key)
+                    .takeIf { it.startsWith("http", ignoreCase = true) }
+                    ?.let { target.add(it) }
+            }
+        }
     }
 
     private suspend fun refreshMainUrlFromHealth(): String? {
@@ -269,7 +297,8 @@ class MovixProvider : MainAPI() {
         } ?: emptyList()
 
         val episodes = mutableListOf<Episode>()
-        details.optJSONArray("seasons")?.toJsonObjects()?.forEach { seasonJson ->
+        val seasons = details.optJSONArray("seasons")?.toJsonObjects() ?: emptyList()
+        for (seasonJson in seasons) {
             val seasonNumber = seasonJson.optInt("season_number")
             val episodeCount = seasonJson.optInt("episode_count")
             if (seasonNumber > 0 && episodeCount > 0) {
@@ -305,23 +334,15 @@ class MovixProvider : MainAPI() {
         val links = if (type == "tv") {
             val season = parts.getOrNull(2)?.toIntOrNull() ?: return false
             val episode = parts.getOrNull(3)?.toIntOrNull() ?: return false
-            val available = JSONObject(app.get("https://frembed.click/api/public/v1/tv/$id?sa=$season&epi=$episode").text)
-            val result = available.optJSONObject("result") ?: return false
-            if (result.optInt("totalItems", 0) == 0) return false
-            val publicLink = result.optJSONArray("items")
-                ?.optJSONObject(0)
-                ?.optString("link")
-                ?.takeIf { it.startsWith("http", ignoreCase = true) }
-            listOfNotNull(publicLink, "https://frembed.click/api/serie.php?id=$id&sa=$season&epi=$episode")
+            mutableListOf<String>().apply {
+                val json = getMovixApi("/api/tmdb/tv/$id?season=$season&episode=$episode")
+                addPlayerLinks(this, json.optJSONObject("current_episode"))
+            }
         } else {
-            val available = JSONObject(app.get("https://frembed.click/api/public/v1/movies/$id").text)
-            val result = available.optJSONObject("result") ?: return false
-            if (result.optInt("total", 0) == 0) return false
-            val publicLink = result.optJSONArray("items")
-                ?.optJSONObject(0)
-                ?.optString("link")
-                ?.takeIf { it.startsWith("http", ignoreCase = true) }
-            listOfNotNull(publicLink, "https://frembed.click/api/film.php?id=$id")
+            mutableListOf<String>().apply {
+                val json = getMovixApi("/api/tmdb/movie/$id")
+                addPlayerLinks(this, json)
+            }
         }
 
         var found = false

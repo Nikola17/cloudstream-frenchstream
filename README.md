@@ -32,4 +32,4 @@ Repo CloudStream contenant des providers FR, dont **French-Stream** et **Movix**
 - French-Stream : `https://french-stream.pink`, `https://fstream.info`
 - Movix : `https://movix.tax`, `https://movix.cash`
   - Si les domaines changent, le provider tente de récupérer l'adresse officielle depuis `https://movix.health/`.
-  - Les catalogues Movix utilisent TMDB, comme le site Movix, et les lecteurs utilisent le fallback Frembed public.
+  - Les catalogues Movix utilisent TMDB, comme le site Movix, et les lecteurs sont récupérés depuis l'API Movix.
