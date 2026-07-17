@@ -35,9 +35,15 @@ class MovixProvider : MainAPI() {
 
     private val healthUrl = "https://movix.online"
     private val mirrors = listOf("https://movix.date", "https://movix.show", "https://movix.cash")
+    private val movixApiUrl = "https://api.movix.show"
     private val tmdbApi = "https://api.themoviedb.org/3"
     private val tmdbKey = "f3d757824f08ea2cff45eb8f47ca3a1e"
     private val imageBase = "https://image.tmdb.org/t/p"
+    private val movixHeaders = mapOf(
+        "Origin" to "https://movix.show",
+        "Referer" to "https://movix.show/",
+        "User-Agent" to "Mozilla/5.0"
+    )
 
     override val mainPage = mainPageOf(
         "movie/popular" to "Films populaires",
@@ -323,56 +329,79 @@ class MovixProvider : MainAPI() {
         val type = parts.getOrNull(0) ?: return false
         val id = parts.getOrNull(1)?.toIntOrNull() ?: return false
 
-        val links = if (type == "tv") {
+        val primaryLinks = if (type == "tv") {
             val season = parts.getOrNull(2)?.toIntOrNull() ?: return false
             val episode = parts.getOrNull(3)?.toIntOrNull() ?: return false
-            frembedTvLinks(id, season, episode)
+            fstreamTvLinks(id, season, episode)
         } else {
-            frembedMovieLinks(id)
+            fstreamMovieLinks(id)
         }
 
+        if (loadExtractorLinks(primaryLinks, subtitleCallback, callback)) return true
+
+        val fallbackLinks = if (type == "tv") {
+            val season = parts.getOrNull(2)?.toIntOrNull() ?: return false
+            val episode = parts.getOrNull(3)?.toIntOrNull() ?: return false
+            wiflixTvLinks(id, season, episode)
+        } else {
+            customMovieLinks(id) + wiflixMovieLinks(id)
+        }
+
+        return loadExtractorLinks(fallbackLinks, subtitleCallback, callback)
+    }
+
+    private suspend fun loadExtractorLinks(
+        links: List<String>,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
         var found = false
         links.distinct().forEach { link ->
-            if (loadExtractor(link, subtitleCallback, callback)) {
+            if (runCatching { loadExtractor(link, subtitleCallback, callback) }.getOrDefault(false)) {
                 found = true
             }
         }
         return found
     }
 
-    private suspend fun frembedMovieLinks(id: Int): List<String> {
-        val result = JSONObject(app.get("https://frembed.click/api/public/v1/movies/$id").text)
-            .optJSONObject("result")
-            ?: return emptyList()
-        if (result.optInt("total", 0) <= 0) return emptyList()
-
-        val publicLink = result.optJSONArray("items")
-            ?.optJSONObject(0)
-            ?.optString("link")
-            ?.takeIf { it.startsWith("http", ignoreCase = true) }
-
-        return listOfNotNull(
-            publicLink,
-            "https://frembed.click/embed/movie/$id",
-            "https://frembed.click/api/film.php?id=$id"
-        )
+    private suspend fun getMovixApi(path: String): JSONObject? {
+        return runCatching {
+            val response = app.get(
+                "$movixApiUrl/${path.trimStart('/')}",
+                headers = movixHeaders
+            )
+            if (!response.isSuccessful) return@runCatching null
+            JSONObject(response.text)
+        }.getOrNull()
     }
 
-    private suspend fun frembedTvLinks(id: Int, season: Int, episode: Int): List<String> {
-        val result = JSONObject(app.get("https://frembed.click/api/public/v1/tv/$id?sa=$season&epi=$episode").text)
-            .optJSONObject("result")
-            ?: return emptyList()
-        if (result.optInt("totalItems", 0) <= 0) return emptyList()
+    private suspend fun fstreamMovieLinks(id: Int): List<String> {
+        return getMovixApi("api/fstream/movie/$id")
+            ?.let(MovixLinkParser::fstreamMovie)
+            ?: emptyList()
+    }
 
-        val publicLink = result.optJSONArray("items")
-            ?.optJSONObject(0)
-            ?.optString("link")
-            ?.takeIf { it.startsWith("http", ignoreCase = true) }
+    private suspend fun fstreamTvLinks(id: Int, season: Int, episode: Int): List<String> {
+        return getMovixApi("api/fstream/tv/$id/season/$season")
+            ?.let { MovixLinkParser.fstreamTv(it, episode) }
+            ?: emptyList()
+    }
 
-        return listOfNotNull(
-            publicLink,
-            "https://frembed.click/embed/serie/$id?sa=$season&epi=$episode",
-            "https://frembed.click/api/serie.php?id=$id&sa=$season&epi=$episode"
-        )
+    private suspend fun customMovieLinks(id: Int): List<String> {
+        return getMovixApi("api/links/movie/$id")
+            ?.let(MovixLinkParser::customMovie)
+            ?: emptyList()
+    }
+
+    private suspend fun wiflixMovieLinks(id: Int): List<String> {
+        return getMovixApi("api/wiflix/movie/$id")
+            ?.let(MovixLinkParser::wiflixMovie)
+            ?: emptyList()
+    }
+
+    private suspend fun wiflixTvLinks(id: Int, season: Int, episode: Int): List<String> {
+        return getMovixApi("api/wiflix/tv/$id/$season")
+            ?.let { MovixLinkParser.wiflixTv(it, episode) }
+            ?: emptyList()
     }
 }
