@@ -16,16 +16,16 @@
         "name": "FrenchStreamProvider"
     },
     {
-        "fileHash": "sha256-490872956baa984a06a7f6a3c81fc05409c0ce4886955b66a58d47935c41314f",
+        "fileHash": "sha256-592761621330e876a14cde23b968a95965b8351297f68c3dc609d4867b170969",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Nikola17/cloudstream-frenchstream",
-        "fileSize": 23879,
+        "fileSize": 28335,
         "status": 3,
         "language": "fr",
         "authors": [
             "Nico"
         ],
-        "version": 4,
+        "version": 5,
         "internalName": "Movix",
         "description": "Movix provider for CloudStream",
         "url": "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/builds/Movix.cs3",
