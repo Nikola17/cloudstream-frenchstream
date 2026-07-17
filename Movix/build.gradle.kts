@@ -1,10 +1,10 @@
 import com.android.build.gradle.BaseExtension
 
-version = 5
+version = 6
 
 extensions.configure<BaseExtension>("android") {
     defaultConfig {
-        versionCode = 5
+        versionCode = 6
     }
 }
 
@@ -17,4 +17,5 @@ cloudstream {
 dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
 }

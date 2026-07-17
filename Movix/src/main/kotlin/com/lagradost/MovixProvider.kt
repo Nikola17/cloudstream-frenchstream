@@ -355,13 +355,11 @@ class MovixProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        var found = false
-        links.distinct().forEach { link ->
-            if (runCatching { loadExtractor(link, subtitleCallback, callback) }.getOrDefault(false)) {
-                found = true
-            }
-        }
-        return found
+        return MovixExtractorPipeline.load(
+            links = links,
+            loader = { link, emit -> loadExtractor(link, subtitleCallback, emit) },
+            callback = callback
+        )
     }
 
     private suspend fun getMovixApi(path: String): JSONObject? {
