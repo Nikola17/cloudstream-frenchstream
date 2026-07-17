@@ -26,24 +26,18 @@ import java.net.URI
 import java.net.URLEncoder
 
 class MovixProvider : MainAPI() {
-    override var mainUrl = "https://movix.tax"
+    override var mainUrl = "https://movix.date"
     override var name = "Movix"
     override val hasMainPage = true
     override val hasQuickSearch = true
     override var lang = "fr"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
-    private val healthUrl = "https://movix.health"
-    private val mirrors = listOf("https://movix.tax", "https://movix.cash")
-    private val movixApiUrl = "https://api.movix.tax"
+    private val healthUrl = "https://movix.online"
+    private val mirrors = listOf("https://movix.date", "https://movix.show", "https://movix.cash")
     private val tmdbApi = "https://api.themoviedb.org/3"
     private val tmdbKey = "f3d757824f08ea2cff45eb8f47ca3a1e"
     private val imageBase = "https://image.tmdb.org/t/p"
-    private val movixHeaders = mapOf(
-        "Origin" to "https://movix.tax",
-        "Referer" to "https://movix.tax/",
-        "User-Agent" to "Mozilla/5.0"
-    )
 
     override val mainPage = mainPageOf(
         "movie/popular" to "Films populaires",
@@ -125,39 +119,13 @@ class MovixProvider : MainAPI() {
         return path.trim('/').split('/').filter { it.isNotBlank() }
     }
 
-    private suspend fun getMovixApi(path: String): JSONObject {
-        return JSONObject(app.get("$movixApiUrl/${path.trimStart('/')}", headers = movixHeaders).text)
-    }
-
-    private fun addPlayerLinks(target: MutableList<String>, parent: JSONObject?) {
-        if (parent == null) return
-
-        val players = parent.optJSONArray("player_links")
-        if (players != null) {
-            for (index in 0 until players.length()) {
-                val player = players.optJSONObject(index) ?: continue
-                listOf("decoded_url", "clone_url").forEach { key ->
-                    player.optString(key)
-                        .takeIf { it.startsWith("http", ignoreCase = true) }
-                        ?.let { target.add(it) }
-                }
-            }
-        }
-
-        if (target.isEmpty()) {
-            parent.optString("iframe_src")
-                .takeIf { it.startsWith("http", ignoreCase = true) }
-                ?.let { target.add(it) }
-        }
-    }
-
     private suspend fun refreshMainUrlFromHealth(): String? {
         val response = try {
             app.get(healthUrl)
         } catch (_: Exception) {
-            return null
+            return refreshMainUrlFromMirrors()
         }
-        if (!response.isSuccessful) return null
+        if (!response.isSuccessful) return refreshMainUrlFromMirrors()
 
         val discovered = Regex("""(?:https://)?movix\.[a-z0-9.-]+""", RegexOption.IGNORE_CASE)
             .findAll(response.text)
@@ -168,10 +136,24 @@ class MovixProvider : MainAPI() {
                     !it.endsWith(".png", ignoreCase = true)
             }
 
-        if (!discovered.isNullOrBlank()) {
+        if (!discovered.isNullOrBlank() && isReachable(discovered)) {
             mainUrl = discovered
+        } else {
+            return refreshMainUrlFromMirrors()
         }
-        return discovered
+        return mainUrl
+    }
+
+    private suspend fun refreshMainUrlFromMirrors(): String? {
+        return mirrors.firstOrNull { isReachable(it) }?.also { mainUrl = it }
+    }
+
+    private suspend fun isReachable(url: String): Boolean {
+        return try {
+            app.get(url).isSuccessful
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private fun toSearchResponse(item: JSONObject): SearchResponse? {
@@ -344,15 +326,9 @@ class MovixProvider : MainAPI() {
         val links = if (type == "tv") {
             val season = parts.getOrNull(2)?.toIntOrNull() ?: return false
             val episode = parts.getOrNull(3)?.toIntOrNull() ?: return false
-            mutableListOf<String>().apply {
-                val json = getMovixApi("/api/tmdb/tv/$id?season=$season&episode=$episode")
-                addPlayerLinks(this, json.optJSONObject("current_episode"))
-            }
+            frembedTvLinks(id, season, episode)
         } else {
-            mutableListOf<String>().apply {
-                val json = getMovixApi("/api/tmdb/movie/$id")
-                addPlayerLinks(this, json)
-            }
+            frembedMovieLinks(id)
         }
 
         var found = false
@@ -362,5 +338,41 @@ class MovixProvider : MainAPI() {
             }
         }
         return found
+    }
+
+    private suspend fun frembedMovieLinks(id: Int): List<String> {
+        val result = JSONObject(app.get("https://frembed.click/api/public/v1/movies/$id").text)
+            .optJSONObject("result")
+            ?: return emptyList()
+        if (result.optInt("total", 0) <= 0) return emptyList()
+
+        val publicLink = result.optJSONArray("items")
+            ?.optJSONObject(0)
+            ?.optString("link")
+            ?.takeIf { it.startsWith("http", ignoreCase = true) }
+
+        return listOfNotNull(
+            publicLink,
+            "https://frembed.click/embed/movie/$id",
+            "https://frembed.click/api/film.php?id=$id"
+        )
+    }
+
+    private suspend fun frembedTvLinks(id: Int, season: Int, episode: Int): List<String> {
+        val result = JSONObject(app.get("https://frembed.click/api/public/v1/tv/$id?sa=$season&epi=$episode").text)
+            .optJSONObject("result")
+            ?: return emptyList()
+        if (result.optInt("totalItems", 0) <= 0) return emptyList()
+
+        val publicLink = result.optJSONArray("items")
+            ?.optJSONObject(0)
+            ?.optString("link")
+            ?.takeIf { it.startsWith("http", ignoreCase = true) }
+
+        return listOfNotNull(
+            publicLink,
+            "https://frembed.click/embed/serie/$id?sa=$season&epi=$episode",
+            "https://frembed.click/api/serie.php?id=$id&sa=$season&epi=$episode"
+        )
     }
 }
