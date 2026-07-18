@@ -32,7 +32,7 @@ jobs:
           sudo ln -sf /opt/gradle/bin/gradle /usr/local/bin/gradle
 
       - name: Build plugins
-        run: gradle makePluginsJson
+        run: gradle testDebugUnitTest makePluginsJson
 
       - name: Find generated files
         run: |
