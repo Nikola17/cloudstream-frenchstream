@@ -330,7 +330,20 @@ class FrenchStreamProvider : MainAPI() {
         "s-tv/netflix-series-" to "Nouveautés Netflix",
         "s-tv/series-disney-plus" to "Nouveautés Disney+",
         "s-tv/series-apple-tv" to "Nouveautés Apple TV+",
-        "s-tv/serie-amazon-prime-videos" to "Nouveautés Prime Video"
+        "s-tv/serie-amazon-prime-videos" to "Nouveautés Prime Video",
+        "films/actions" to "Films Action",
+        "films/comedies" to "Films Comédie",
+        "films/epouvante-horreurs" to "Films Épouvante & Horreur",
+        "films/science-fictions" to "Films Science-fiction",
+        "films/fantastiques" to "Films Fantastique",
+        "action-serie-" to "Séries Action",
+        "comedie-serie-" to "Séries Comédie",
+        "documentaire-serie-" to "Séries Documentaire",
+        "fantastique-series-" to "Séries Fantastique",
+        "science-fiction-series-" to "Séries Science-fiction",
+        "policier-series-" to "Séries Policier",
+        "horreur-serie-" to "Séries Horreur",
+        "k-drama-" to "K-Drama"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
