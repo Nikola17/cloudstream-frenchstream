@@ -1,29 +1,23 @@
 package com.lagradost
 
-import com.lagradost.cloudstream3.Episode
-import com.lagradost.cloudstream3.ErrorLoadingException
-import com.lagradost.cloudstream3.HomePageList
-import com.lagradost.cloudstream3.HomePageResponse
-import com.lagradost.cloudstream3.LoadResponse
-import com.lagradost.cloudstream3.MainAPI
-import com.lagradost.cloudstream3.MainPageRequest
-import com.lagradost.cloudstream3.SearchResponse
-import com.lagradost.cloudstream3.SubtitleFile
-import com.lagradost.cloudstream3.TvType
-import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.mainPageOf
-import com.lagradost.cloudstream3.newEpisode
-import com.lagradost.cloudstream3.newHomePageResponse
-import com.lagradost.cloudstream3.newMovieLoadResponse
-import com.lagradost.cloudstream3.newMovieSearchResponse
-import com.lagradost.cloudstream3.newTvSeriesLoadResponse
-import com.lagradost.cloudstream3.newTvSeriesSearchResponse
+import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
+import com.lagradost.cloudstream3.LoadResponse.Companion.addImdbId
+import com.lagradost.cloudstream3.LoadResponse.Companion.addTMDbId
+import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URI
 import java.net.URLEncoder
+import java.text.SimpleDateFormat
+import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 
 class MovixProvider : MainAPI() {
     override var mainUrl = "https://movix.date"
@@ -44,6 +38,8 @@ class MovixProvider : MainAPI() {
         "Referer" to "https://movix.show/",
         "User-Agent" to "Mozilla/5.0"
     )
+    private data class QualityCacheEntry(val quality: SearchQuality?, val expiresAt: Long)
+    private val qualityCache = ConcurrentHashMap<Int, QualityCacheEntry>()
 
     override val mainPage = mainPageOf(
         "movie/popular" to "Films populaires",
@@ -183,13 +179,17 @@ class MovixProvider : MainAPI() {
 
         return if (mediaType == "movie") {
             newMovieSearchResponse(title, mediaUrl("movie", id), TvType.Movie) {
+                this.id = id
                 posterUrl = poster
                 this.year = releaseYear
+                score = Score.from10(item.optDouble("vote_average").takeIf { it > 0.0 })
             }
         } else {
             newTvSeriesSearchResponse(title, mediaUrl("tv", id), TvType.TvSeries) {
+                this.id = id
                 posterUrl = poster
                 this.year = releaseYear
+                score = Score.from10(item.optDouble("vote_average").takeIf { it > 0.0 })
             }
         }
     }
@@ -227,6 +227,7 @@ class MovixProvider : MainAPI() {
             ?.map { if (!it.has("media_type")) it.put("media_type", type) else it }
             ?.mapNotNull { toSearchResponse(it) }
             ?: emptyList()
+        enrichMovieQualities(items)
 
         val totalPages = json.optInt("total_pages", page)
         return newHomePageResponse(
@@ -247,11 +248,13 @@ class MovixProvider : MainAPI() {
                 "include_adult" to "false"
             )
         )
-        return json.optJSONArray("results")
+        val results = json.optJSONArray("results")
             ?.toJsonObjects()
             ?.mapNotNull { toSearchResponse(it) }
             ?.distinctBy { it.url }
             ?: emptyList()
+        enrichMovieQualities(results)
+        return results
     }
 
     override suspend fun quickSearch(query: String): List<SearchResponse> {
@@ -272,51 +275,160 @@ class MovixProvider : MainAPI() {
     }
 
     private suspend fun loadMovie(id: Int): LoadResponse {
-        val details = getTmdb("movie/$id", extra = mapOf("append_to_response" to "external_ids"))
+        val details = getTmdb(
+            "movie/$id",
+            extra = mapOf(
+                "append_to_response" to "credits,videos,recommendations,images,external_ids,release_dates",
+                "include_image_language" to "fr,en,null"
+            )
+        )
         val title = details.optString("title").ifBlank { details.optString("original_title").ifBlank { "Movix" } }
         val genres = details.optJSONArray("genres")?.toJsonObjects()?.mapNotNull {
             it.optString("name").takeIf { tag -> tag.isNotBlank() }
         } ?: emptyList()
+        val imdbId = details.optString("imdb_id").ifBlank {
+            details.optJSONObject("external_ids")?.optString("imdb_id").orEmpty()
+        }.takeIf { it.isNotBlank() }
 
         return newMovieLoadResponse(title, mediaUrl("movie", id), TvType.Movie, mediaUrl("movie", id)) {
             posterUrl = image(details.optString("poster_path"))
             backgroundPosterUrl = image(details.optString("backdrop_path"), "w1280")
+            logoUrl = logo(details)
             year = year(details.optString("release_date"))
             plot = details.optString("overview")
             tags = genres
+            duration = details.optInt("runtime").takeIf { it > 0 }
+            score = Score.from10(details.optDouble("vote_average").takeIf { it > 0.0 })
+            contentRating = MovixMetadata.movieContentRating(details)
+            recommendations = recommendations(details, "movie")
+            addActors(actors(details))
+            addTrailer(MovixMetadata.trailerUrl(details))
+            addImdbId(imdbId)
+            addTMDbId(id.toString())
         }
     }
 
     private suspend fun loadTv(id: Int): LoadResponse {
-        val details = getTmdb("tv/$id", extra = mapOf("append_to_response" to "external_ids"))
+        val details = getTmdb(
+            "tv/$id",
+            extra = mapOf(
+                "append_to_response" to "credits,videos,recommendations,images,external_ids,content_ratings",
+                "include_image_language" to "fr,en,null"
+            )
+        )
         val title = details.optString("name").ifBlank { details.optString("original_name").ifBlank { "Movix" } }
         val genres = details.optJSONArray("genres")?.toJsonObjects()?.mapNotNull {
             it.optString("name").takeIf { tag -> tag.isNotBlank() }
         } ?: emptyList()
+        val poster = image(details.optString("poster_path"))
+        val imdbId = details.optJSONObject("external_ids")?.optString("imdb_id")?.takeIf { it.isNotBlank() }
 
-        val episodes = mutableListOf<Episode>()
-        val seasons = details.optJSONArray("seasons")?.toJsonObjects() ?: emptyList()
-        for (seasonJson in seasons) {
-            val seasonNumber = seasonJson.optInt("season_number")
-            val episodeCount = seasonJson.optInt("episode_count")
-            if (seasonNumber > 0 && episodeCount > 0) {
-                for (episodeNumber in 1..episodeCount) {
-                    episodes.add(newEpisode(episodeData(id, seasonNumber, episodeNumber)) {
-                        name = "Episode $episodeNumber"
-                        season = seasonNumber
-                        episode = episodeNumber
-                    })
-                }
-            }
-        }
+        val seasonNumbers = details.optJSONArray("seasons")?.toJsonObjects()
+            ?.mapNotNull { season -> season.optInt("season_number").takeIf { it > 0 } }
+            ?: emptyList()
+        val episodes = loadTmdbSeasons(id, seasonNumbers, poster)
 
         return newTvSeriesLoadResponse(title, "$mainUrl/tv/$id", TvType.TvSeries, episodes) {
-            posterUrl = image(details.optString("poster_path"))
+            posterUrl = poster
             backgroundPosterUrl = image(details.optString("backdrop_path"), "w1280")
+            logoUrl = logo(details)
             year = year(details.optString("first_air_date"))
             plot = details.optString("overview")
             tags = genres
+            duration = details.optJSONArray("episode_run_time")?.let { runtimes ->
+                (0 until runtimes.length()).map { runtimes.optInt(it) }.filter { it > 0 }.average()
+                    .takeIf { !it.isNaN() }?.toInt()
+            }
+            score = Score.from10(details.optDouble("vote_average").takeIf { it > 0.0 })
+            showStatus = MovixMetadata.showStatus(details.optString("status"))
+            contentRating = MovixMetadata.tvContentRating(details)
+            recommendations = recommendations(details, "tv")
+            addActors(actors(details))
+            addTrailer(MovixMetadata.trailerUrl(details))
+            addImdbId(imdbId)
+            addTMDbId(id.toString())
         }
+    }
+
+    private suspend fun loadTmdbSeasons(id: Int, seasons: List<Int>, fallbackPoster: String?): List<Episode> {
+        val episodes = mutableListOf<Episode>()
+        for (batch in seasons.chunked(4)) {
+            episodes += coroutineScope {
+                batch.map { seasonNumber ->
+                    async {
+                        runCatching { getTmdb("tv/$id/season/$seasonNumber") }.getOrNull()
+                            ?.optJSONArray("episodes")
+                            ?.toJsonObjects()
+                            ?.mapNotNull { episodeJson ->
+                                val episodeNumber = episodeJson.optInt("episode_number").takeIf { it > 0 }
+                                    ?: return@mapNotNull null
+                                newEpisode(episodeData(id, seasonNumber, episodeNumber)) {
+                                    name = episodeJson.optString("name").ifBlank { "Episode $episodeNumber" }
+                                    season = seasonNumber
+                                    episode = episodeNumber
+                                    description = episodeJson.optString("overview").takeIf { it.isNotBlank() }
+                                    score = Score.from10(episodeJson.optDouble("vote_average").takeIf { it > 0.0 })
+                                    runTime = episodeJson.optInt("runtime").takeIf { it > 0 }
+                                    posterUrl = image(episodeJson.optString("still_path")) ?: fallbackPoster
+                                    date = parseDate(episodeJson.optString("air_date"))
+                                }
+                            }
+                            ?: emptyList()
+                    }
+                }.awaitAll().flatten()
+            }
+        }
+        return episodes.sortedWith(compareBy<Episode> { it.season }.thenBy { it.episode })
+    }
+
+    private fun actors(details: JSONObject): List<Pair<Actor, String?>> {
+        return MovixMetadata.cast(details).take(30).map { cast ->
+            Actor(cast.name, image(cast.profilePath, "w185")) to cast.character
+        }
+    }
+
+    private fun logo(details: JSONObject): String? {
+        val logos = details.optJSONObject("images")?.optJSONArray("logos")?.toJsonObjects() ?: return null
+        val selected = logos.firstOrNull { it.optString("iso_639_1") == "fr" }
+            ?: logos.firstOrNull { it.optString("iso_639_1") == "en" }
+            ?: logos.firstOrNull()
+        return image(selected?.optString("file_path"), "w500")
+    }
+
+    private fun recommendations(details: JSONObject, fallbackType: String): List<SearchResponse> {
+        return details.optJSONObject("recommendations")?.optJSONArray("results")?.toJsonObjects()
+            ?.mapNotNull { item ->
+                if (!item.has("media_type")) item.put("media_type", fallbackType)
+                toSearchResponse(item)
+            }
+            ?: emptyList()
+    }
+
+    private fun parseDate(value: String?): Long? {
+        if (value.isNullOrBlank()) return null
+        return runCatching { SimpleDateFormat("yyyy-MM-dd", Locale.US).parse(value)?.time }.getOrNull()
+    }
+
+    private suspend fun enrichMovieQualities(items: List<SearchResponse>) {
+        val movies = items.filter { it.type == TvType.Movie && it.id != null }
+        withTimeoutOrNull(2_500L) {
+            for (batch in movies.chunked(8)) {
+                coroutineScope {
+                    batch.map { item ->
+                        async { item.quality = qualityForMovie(item.id ?: return@async) }
+                    }.awaitAll()
+                }
+            }
+        }
+    }
+
+    private suspend fun qualityForMovie(id: Int): SearchQuality? {
+        val now = System.currentTimeMillis()
+        qualityCache[id]?.takeIf { it.expiresAt > now }?.let { return it.quality }
+        val quality = getMovixApi("api/j1f/movie/$id", timeoutSeconds = 3L)
+            ?.let(MovixMetadata::qualityFromJ1f)
+        qualityCache[id] = QualityCacheEntry(quality, now + 30 * 60 * 1000L)
+        return quality
     }
 
     override suspend fun loadLinks(
@@ -362,11 +474,12 @@ class MovixProvider : MainAPI() {
         )
     }
 
-    private suspend fun getMovixApi(path: String): JSONObject? {
+    private suspend fun getMovixApi(path: String, timeoutSeconds: Long = 15L): JSONObject? {
         return runCatching {
             val response = app.get(
                 "$movixApiUrl/${path.trimStart('/')}",
-                headers = movixHeaders
+                headers = movixHeaders,
+                timeout = timeoutSeconds
             )
             if (!response.isSuccessful) return@runCatching null
             JSONObject(response.text)
