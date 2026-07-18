@@ -12,13 +12,19 @@ Repo CloudStream contenant des providers FR, dont **French-Stream** et **Movix**
 
 ## Installation
 
-1. Ouvrir CloudStream
-2. Aller dans **Paramètres > Extensions > Ajouter un dépôt**
-3. Copier l'URL du fichier `repo.json` :
+1. Ouvrir CloudStream.
+2. Aller dans **Paramètres > Extensions > Ajouter un dépôt**.
+3. Dans le champ URL, saisir le code court :
    ```
-   https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/main/repo.json
+   MovFS
    ```
-4. Rechercher **Movix** dans les extensions CloudStream.
+4. Valider puis installer **French-Stream** et/ou **Movix**.
+
+Si le code court est temporairement indisponible, utiliser l'URL complète :
+
+```
+https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/main/repo.json
+```
 
 ## Build
 
