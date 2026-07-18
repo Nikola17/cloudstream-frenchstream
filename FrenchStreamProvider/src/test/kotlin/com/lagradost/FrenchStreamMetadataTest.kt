@@ -95,6 +95,40 @@ class FrenchStreamMetadataTest {
     }
 
     @Test
+    fun readsSeriesTagFromCurrentDetailPage() {
+        val document = Jsoup.parse(
+            """
+            <div id="serie-data" data-newsid="15114081">
+              <span class="sd-tagz"><a href="/s-tv/silo">s-125988</a></span>
+            </div>
+            """.trimIndent()
+        )
+
+        assertEquals("s-125988", FrenchStreamMetadata.seriesTag(document))
+    }
+
+    @Test
+    fun parsesSiblingSeasonsFromSiteApi() {
+        val response = org.json.JSONArray(
+            """
+            [
+              {"id":15119075,"title":"Silo - Saison 2","full_url":"15119075-silo-saison-2-2023.html"},
+              {"id":15129154,"title":"Silo - Saison 3","full_url":"/15129154-silo-saison-3-2023.html"},
+              {"id":9,"title":"Love of Silom - Saison 1","full_url":"9-love-of-silom.html"}
+            ]
+            """.trimIndent()
+        )
+
+        assertEquals(
+            listOf(
+                FrenchStreamSeasonRef(2, "Silo - Saison 2", "https://french-stream.one/15119075-silo-saison-2-2023.html"),
+                FrenchStreamSeasonRef(3, "Silo - Saison 3", "https://french-stream.one/15129154-silo-saison-3-2023.html")
+            ),
+            FrenchStreamMetadata.seasonRefs(response, "https://french-stream.one", "Silo")
+        )
+    }
+
+    @Test
     fun parsesVfAndVostfrLinksByEpisode() {
         val root = org.json.JSONObject(
             """
@@ -123,6 +157,37 @@ class FrenchStreamMetadataTest {
                 )
             ),
             FrenchStreamMetadata.episodeLinks(root)
+        )
+    }
+
+    @Test
+    fun parsesEveryMovieLanguageAndDeduplicatesDefaultPlayer() {
+        val root = org.json.JSONObject(
+            """
+            {
+              "players": {
+                "premium": {
+                  "default":"https://fsvid.example/vff",
+                  "vff":"https://fsvid.example/vff",
+                  "vfq":"https://fsvid.example/vfq",
+                  "vostfr":"https://fsvid.example/vostfr"
+                },
+                "vidzy": {
+                  "default":"https://vidzy.example/vf",
+                  "vostfr":"https://vidzy.example/vostfr"
+                }
+              }
+            }
+            """.trimIndent()
+        )
+
+        assertEquals(
+            mapOf(
+                "VF" to listOf("https://fsvid.example/vff", "https://vidzy.example/vf"),
+                "VFQ" to listOf("https://fsvid.example/vfq"),
+                "VOSTFR" to listOf("https://fsvid.example/vostfr", "https://vidzy.example/vostfr")
+            ),
+            FrenchStreamMetadata.movieLinks(root)
         )
     }
 

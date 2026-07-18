@@ -56,6 +56,56 @@ internal object FrenchStreamMetadata {
         }.distinctBy { it.season }.sortedBy { it.season }
     }
 
+    fun seriesTag(document: Document): String? {
+        val container = document.selectFirst("#serie-data") ?: return null
+        return sequenceOf(
+            container.attr("data-serie-tag"),
+            container.selectFirst(".sd-tagz a")?.text(),
+            container.selectFirst(".sd-tagz")?.text()
+        ).mapNotNull { it?.trim()?.takeIf { value -> Regex("""s-\d+""").matches(value) } }
+            .firstOrNull()
+    }
+
+    fun seasonRefs(
+        items: JSONArray,
+        baseUrl: String,
+        canonicalTitle: String
+    ): List<FrenchStreamSeasonRef> {
+        val canonicalKey = titleKey(normalizeTitle(canonicalTitle))
+        val origin = baseUrl.trimEnd('/')
+        return (0 until items.length()).mapNotNull { index ->
+            val item = items.optJSONObject(index) ?: return@mapNotNull null
+            val title = item.optString("title").trim()
+            val season = seasonNumber(title) ?: return@mapNotNull null
+            if (titleKey(normalizeTitle(title)) != canonicalKey) return@mapNotNull null
+            val path = item.optString("full_url").trim().takeIf { it.isNotBlank() }
+                ?: return@mapNotNull null
+            val url = if (isHttpUrl(path)) path else "$origin/${path.trimStart('/')}"
+            FrenchStreamSeasonRef(season, title, url)
+        }.distinctBy { it.season }.sortedBy { it.season }
+    }
+
+    fun movieLinks(root: JSONObject): Map<String, List<String>> {
+        val players = root.optJSONObject("players") ?: return emptyMap()
+        val links = linkedMapOf<String, MutableList<String>>()
+
+        fun add(language: String, url: String?) {
+            val value = url?.trim()?.takeIf(::isHttpUrl) ?: return
+            links.getOrPut(language) { mutableListOf() }.add(value)
+        }
+
+        players.keys().asSequence().sorted().forEach { playerName ->
+            val player = players.optJSONObject(playerName) ?: return@forEach
+            add("VF", player.optString("default"))
+            add("VF", player.optString("vff"))
+            add("VFQ", player.optString("vfq"))
+            add("VOSTFR", player.optString("vostfr"))
+        }
+
+        return links.mapValues { (_, urls) -> urls.distinct() }
+            .filterValues { it.isNotEmpty() }
+    }
+
     fun episodeLinks(root: JSONObject): Map<Int, Map<String, List<String>>> {
         val episodes = sortedMapOf<Int, MutableMap<String, List<String>>>()
         listOf("vf", "vostfr").forEach { language ->

@@ -23,15 +23,18 @@ import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
 class FrenchStreamProvider : MainAPI() {
-    override var mainUrl = "https://french-stream.pink"
-    private val fallbackUrl = "https://fstream.info"
+    override var mainUrl = "https://french-stream.one"
+    private val mirrors = listOf(
+        "https://french-stream.one",
+        "https://french-stream.pink",
+        "https://fstream.info"
+    )
     override var name = "French-Stream"
     override val hasMainPage = true
     override val hasQuickSearch = true
     override var lang = "fr"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
-    private var isUsingFallback = false
     private val uqloadSourceRegex = Regex(
         """sources:.*?["'](https?://[^"']+)["']""",
         RegexOption.DOT_MATCHES_ALL
@@ -48,15 +51,30 @@ class FrenchStreamProvider : MainAPI() {
 
     private data class SiteEpisode(val season: Int, val episode: Int, val data: String)
 
-    private suspend fun safeGet(url: String) = app.get(url).let { response ->
-        if (!response.isSuccessful && !isUsingFallback) {
-            isUsingFallback = true
-            mainUrl = fallbackUrl
-            val fallbackFullUrl = url.replace("https://french-stream.pink", fallbackUrl)
-            app.get(fallbackFullUrl)
-        } else {
-            response
+    private suspend fun safeGet(url: String) = app.get(url).let { initial ->
+        if (initial.isSuccessful) return@let initial
+
+        var response = initial
+        mirrorCandidates(url).drop(1).forEach { (candidate, origin) ->
+            response = app.get(candidate)
+            if (response.isSuccessful) {
+                mainUrl = origin
+                return@let response
+            }
         }
+        response
+    }
+
+    private fun mirrorCandidates(url: String): List<Pair<String, String>> {
+        val uri = runCatching { URI(url) }.getOrNull() ?: return listOf(url to mainUrl)
+        val sourceOrigin = "${uri.scheme}://${uri.authority}"
+        if (mirrors.none { runCatching { URI(it).host }.getOrNull() == uri.host }) {
+            return listOf(url to sourceOrigin)
+        }
+        val suffix = uri.rawPath.orEmpty() + uri.rawQuery?.let { "?$it" }.orEmpty()
+        return (listOf(sourceOrigin) + mirrors)
+            .distinct()
+            .map { origin -> "$origin$suffix" to origin }
     }
 
     /** Extract numeric ID from URLs like /15126665-title.html or /index.php?newsid=15126665 */
@@ -272,11 +290,15 @@ class FrenchStreamProvider : MainAPI() {
         }
 
         val normalized = normalizeExtractorUrl(url)
-        if (runCatching { loadExtractor(normalized, subtitleCallback, emit) }.getOrDefault(false)) {
-            return true
-        }
-        if (normalized != url && runCatching { loadExtractor(url, subtitleCallback, emit) }.getOrDefault(false)) {
-            return true
+        for (candidate in listOf(normalized, url).distinct()) {
+            var emitted = false
+            runCatching {
+                loadExtractor(candidate, subtitleCallback) { link ->
+                    emitted = true
+                    emit(link)
+                }
+            }
+            if (emitted) return true
         }
         if (url.contains("uqload.is", ignoreCase = true)) {
             return loadUqloadDirect(url, emit)
@@ -338,13 +360,32 @@ class FrenchStreamProvider : MainAPI() {
         canonicalTitle: String,
         currentTitle: String,
         currentUrl: String,
-        currentSeason: Int
+        currentSeason: Int,
+        currentDocument: Document
     ): List<FrenchStreamSeasonRef> {
-        val searchUrl = "$mainUrl/?do=search&subaction=search&story=${URLEncoder.encode(canonicalTitle, "UTF-8")}"
-        val discovered = runCatching { safeGet(searchUrl).document }
-            .getOrNull()
-            ?.let { FrenchStreamMetadata.seasonRefs(it, canonicalTitle) }
-            ?: emptyList()
+        val seriesTag = FrenchStreamMetadata.seriesTag(currentDocument)
+        val newsId = extractContentId(currentUrl)
+            ?: currentDocument.selectFirst("#serie-data")?.attr("data-newsid")?.takeIf(String::isNotBlank)
+        val fromApi = if (seriesTag != null && newsId != null) {
+            val apiUrl = "$mainUrl/engine/ajax/get_seasons.php" +
+                "?serie_tag=${URLEncoder.encode(seriesTag, "UTF-8")}" +
+                "&news_id=${URLEncoder.encode(newsId, "UTF-8")}"
+            runCatching { org.json.JSONArray(safeGet(apiUrl).text) }
+                .getOrNull()
+                ?.let { FrenchStreamMetadata.seasonRefs(it, mainUrl, canonicalTitle) }
+                ?: emptyList()
+        } else {
+            emptyList()
+        }
+        val discovered = if (fromApi.isNotEmpty()) {
+            fromApi
+        } else {
+            val searchUrl = "$mainUrl/?do=search&subaction=search&story=${URLEncoder.encode(canonicalTitle, "UTF-8")}"
+            runCatching { safeGet(searchUrl).document }
+                .getOrNull()
+                ?.let { FrenchStreamMetadata.seasonRefs(it, canonicalTitle) }
+                ?: emptyList()
+        }
         val current = FrenchStreamSeasonRef(currentSeason, currentTitle, currentUrl)
         return (discovered + current).associateBy { it.season }.values.sortedBy { it.season }
     }
@@ -454,7 +495,7 @@ class FrenchStreamProvider : MainAPI() {
         }
 
         val currentSeason = FrenchStreamMetadata.seasonNumber(siteTitle) ?: 1
-        val refs = discoverSeasonRefs(canonicalTitle, siteTitle, url, currentSeason)
+        val refs = discoverSeasonRefs(canonicalTitle, siteTitle, url, currentSeason, doc)
         val siteEpisodes = refs.flatMap { loadSiteEpisodes(it, url, doc) }
             .distinctBy { it.season to it.episode }
             .sortedWith(compareBy<SiteEpisode> { it.season }.thenBy { it.episode })
@@ -511,15 +552,8 @@ class FrenchStreamProvider : MainAPI() {
         } else if (data.contains("film_api.php")) {
             val response = safeGet(data).text
             val json = JSONObject(response)
-            if (json.has("players") && !json.isNull("players")) {
-                val players = json.getJSONObject("players")
-                players.keys().forEach { playerName ->
-                    val playerObj = players.getJSONObject(playerName)
-                    if (playerObj.has("default")) {
-                        val url = playerObj.getString("default")
-                        if (url.isNotBlank()) groupedLinks.getOrPut(null) { mutableListOf() }.add(url)
-                    }
-                }
+            FrenchStreamMetadata.movieLinks(json).forEach { (language, links) ->
+                groupedLinks.getOrPut(language) { mutableListOf() }.addAll(links)
             }
         } else if (data.contains("ep-data.php")) {
             val parts = data.split("|")
