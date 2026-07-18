@@ -8,6 +8,7 @@ import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.JsUnpacker
+import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import kotlinx.coroutines.async
@@ -222,8 +223,10 @@ class FrenchStreamProvider : MainAPI() {
     ): Boolean {
         val response = runCatching { app.get(url, referer = mainUrl).text }.getOrNull() ?: return false
         val directUrl = uqloadSourceRegex.find(response)?.groupValues?.getOrNull(1) ?: return false
+        val quality = FrenchStreamQuality.inferQuality(directUrl) ?: Qualities.Unknown.value
         callback(newExtractorLink("Uqload", "Uqload", directUrl) {
             referer = "https://uqload.is/"
+            this.quality = quality
         })
         return true
     }
@@ -265,17 +268,38 @@ class FrenchStreamProvider : MainAPI() {
         }.getOrNull() ?: return false
         val directUrl = extractDirectVideoUrl(response) ?: return false
         val sourceName = sourceNameFromUrl(url)
+        val origin = runCatching { URI(url) }
+            .getOrNull()
+            ?.let { "${it.scheme}://${it.authority}" }
         val type = if (directUrl.contains(".m3u8", ignoreCase = true)) {
             ExtractorLinkType.M3U8
         } else {
             ExtractorLinkType.VIDEO
         }
+        val streamHeaders = externalHeaders + mapOf("Referer" to url) +
+            origin?.let { mapOf("Origin" to it) }.orEmpty()
+        val quality = resolveQuality(directUrl, streamHeaders)
 
         callback(newExtractorLink(sourceName, sourceName, directUrl, type) {
             referer = url
-            headers = externalHeaders + mapOf("Referer" to url)
+            headers = streamHeaders
+            this.quality = quality
         })
         return true
+    }
+
+    private suspend fun resolveQuality(directUrl: String, headers: Map<String, String>): Int {
+        val inferred = FrenchStreamQuality.inferQuality(directUrl)
+        if (!directUrl.contains(".m3u8", ignoreCase = true)) {
+            return inferred ?: Qualities.Unknown.value
+        }
+
+        val manifest = withTimeoutOrNull(4_000L) {
+            runCatching { app.get(directUrl, headers = headers).text }.getOrNull()
+        }
+        return manifest?.let(FrenchStreamQuality::highestHlsQuality)
+            ?: inferred
+            ?: Qualities.Unknown.value
     }
 
     private suspend fun loadHostedLink(
@@ -309,12 +333,15 @@ class FrenchStreamProvider : MainAPI() {
     @Suppress("DEPRECATION")
     private fun withLanguage(link: ExtractorLink, language: String?): ExtractorLink {
         val label = language?.uppercase()?.takeIf { it.isNotBlank() } ?: return link
+        val detectedQuality = link.quality.takeIf { it > Qualities.Unknown.value }
+            ?: FrenchStreamQuality.inferQuality(link.url)
+            ?: link.quality
         return ExtractorLink(
             source = "$label ${link.source}",
             name = "$label ${link.name}",
             url = link.url,
             referer = link.referer,
-            quality = link.quality,
+            quality = detectedQuality,
             headers = link.headers,
             extractorData = link.extractorData,
             type = link.type,
@@ -592,16 +619,26 @@ class FrenchStreamProvider : MainAPI() {
 
         if (groupedLinks.values.all { it.isEmpty() }) return false
 
-        var found = false
-        groupedLinks.forEach { (language, links) ->
+        val requests = groupedLinks.flatMap { (language, links) ->
             links.distinct()
-                .sortedBy { extractorPriority(it) }
-                .forEach { link ->
-                    if (loadHostedLink(link, language, subtitleCallback, callback)) {
-                        found = true
-                    }
-                }
+                .sortedBy(::extractorPriority)
+                .map { language to it }
         }
-        return found
+        val resolvedLinks = mutableListOf<FrenchStreamResolvedLink>()
+        requests.chunked(8).forEach { batch ->
+            resolvedLinks += coroutineScope {
+                batch.map { (language, link) ->
+                    async {
+                        val resolved = mutableListOf<FrenchStreamResolvedLink>()
+                        loadHostedLink(link, language, subtitleCallback) { item ->
+                            resolved += FrenchStreamResolvedLink(language, item)
+                        }
+                        resolved
+                    }
+                }.awaitAll().flatten()
+            }
+        }
+        FrenchStreamQuality.bestFirst(resolvedLinks).forEach { callback(it.link) }
+        return resolvedLinks.isNotEmpty()
     }
 }
