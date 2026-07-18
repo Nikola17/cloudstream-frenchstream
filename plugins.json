@@ -1,15 +1,15 @@
 [
     {
-        "fileHash": "sha256-73e572c4deacd95a9755cde04b54acb64f88d4688eb00c2acf4c3d1d1d15b88a",
+        "fileHash": "sha256-72bd72997c95641708d7f3f07c589bcd9fcc81cd1643d24f6467dfc066f754b3",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Nikola17/cloudstream-frenchstream",
-        "fileSize": 58973,
+        "fileSize": 63530,
         "status": 3,
         "language": "fr",
         "authors": [
             "Nico"
         ],
-        "version": 5,
+        "version": 6,
         "internalName": "FrenchStreamProvider",
         "description": "French-Stream provider for CloudStream",
         "url": "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/builds/FrenchStreamProvider.cs3",
