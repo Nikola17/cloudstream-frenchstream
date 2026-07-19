@@ -68,11 +68,13 @@ internal data class FrenchMangaEpisodePayload(val pageUrl: String, val episode: 
 
 internal object FrenchMangaParser {
     val categories = listOf(
-        FrenchMangaCategory("/xfsearch/tagz/gore/", "Gore"),
-        FrenchMangaCategory("/xfsearch/tagz/dark+fantasy/", "Dark Fantasy"),
-        FrenchMangaCategory("/xfsearch/tagz/seinen/", "Seinen"),
-        FrenchMangaCategory("/xfsearch/tagz/isekai/", "Isekai"),
+        FrenchMangaCategory("/manga-streaming-1/", "Récemment mises à jour"),
+        FrenchMangaCategory("/manga-streaming-1/coups-de-cur/", "Coups de Cœur"),
         FrenchMangaCategory("/xfsearch/tagz/shounen/", "Shonen"),
+        FrenchMangaCategory("/xfsearch/tagz/seinen/", "Seinen"),
+        FrenchMangaCategory("/xfsearch/tagz/dark+fantasy/", "Dark Fantasy"),
+        FrenchMangaCategory("/xfsearch/tagz/gore/", "Gore"),
+        FrenchMangaCategory("/xfsearch/tagz/isekai/", "Isekai"),
         FrenchMangaCategory("/xfsearch/manga_genre/Thriller/", "Thriller"),
         FrenchMangaCategory("/xfsearch/manga_genre/Aventure/", "Aventure"),
         FrenchMangaCategory("/xfsearch/manga_genre/Action+%26+Adventure/", "Action & Aventure"),

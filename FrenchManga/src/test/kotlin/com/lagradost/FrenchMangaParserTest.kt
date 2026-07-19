@@ -8,13 +8,21 @@ import org.junit.Test
 
 class FrenchMangaParserTest {
     @Test
-    fun exposesRequestedCatalogsAndRenamesShounen() {
+    fun exposesRequestedCatalogsInHomepageOrder() {
         assertEquals(
             listOf(
-                "Gore", "Dark Fantasy", "Seinen", "Isekai", "Shonen", "Thriller",
+                "Récemment mises à jour", "Coups de Cœur", "Shonen", "Seinen", "Dark Fantasy",
+                "Gore", "Isekai", "Thriller",
                 "Aventure", "Action & Aventure", "Science-Fiction & Fantastique"
             ),
             FrenchMangaParser.categories.map { it.label }
+        )
+        assertEquals(
+            listOf(
+                "/manga-streaming-1/",
+                "/manga-streaming-1/coups-de-cur/"
+            ),
+            FrenchMangaParser.categories.take(2).map { it.path }
         )
     }
 
