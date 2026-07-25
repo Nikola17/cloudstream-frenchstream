@@ -31,6 +31,10 @@ internal object FrenchStreamMetadata {
         """\s*(?:\[(?:VF|VOSTFR?|VFQ|VFF)(?:\s*\+\s*(?:VF|VOSTFR?|VFQ|VFF))*]|(?:VF|VOSTFR?|VFQ|VFF)(?:\s*\+\s*(?:VF|VOSTFR?|VFQ|VFF))*)\s*$""",
         RegexOption.IGNORE_CASE
     )
+    private val movieDescriptionPrefixRegex = Regex(
+        """^\s*Résumé\s+du\s+film\b.*?\ben\s+streaming\s+complet\s+vf\s+et\s+vostfr\s+hd\s+vod\s+gratuit\s+sans\s+limite\s+et\s+sans\s+inscription[\s:.,;\-–—]*""",
+        setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+    )
 
     fun normalizeTitle(title: String): String {
         var value = title.trim()
@@ -42,6 +46,10 @@ internal object FrenchStreamMetadata {
 
     fun seasonNumber(title: String): Int? {
         return seasonRegex.find(title)?.groupValues?.getOrNull(1)?.toIntOrNull()
+    }
+
+    fun cleanMovieDescription(description: String): String {
+        return movieDescriptionPrefixRegex.replace(description, "").trim()
     }
 
     fun seasonRefs(document: Document, canonicalTitle: String): List<FrenchStreamSeasonRef> {

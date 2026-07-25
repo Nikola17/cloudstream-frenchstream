@@ -27,6 +27,22 @@ class FrenchStreamMetadataTest {
     }
 
     @Test
+    fun removesFrenchStreamMovieDescriptionPrefix() {
+        assertEquals(
+            "Le véritable résumé du film commence ici.",
+            FrenchStreamMetadata.cleanMovieDescription(
+                "Résumé du film Exemple en streaming complet VF et VOSTFR HD VOD gratuit sans limite et sans inscription : Le véritable résumé du film commence ici."
+            )
+        )
+    }
+
+    @Test
+    fun keepsRegularMovieDescription() {
+        val description = "Une aventure commence dans un village isolé."
+        assertEquals(description, FrenchStreamMetadata.cleanMovieDescription(description))
+    }
+
+    @Test
     fun cameraReleaseWinsOverHdResolution() {
         assertEquals(SearchQuality.Telesync, FrenchStreamMetadata.quality("TS VF HD"))
         assertEquals(SearchQuality.HdCam, FrenchStreamMetadata.quality("HDCAM 1080p"))

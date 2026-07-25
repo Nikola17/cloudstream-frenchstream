@@ -516,11 +516,12 @@ class FrenchStreamProvider : MainAPI() {
         if (!isSeries) {
             val contentId = extractContentId(url) ?: url
             val apiUrl = "$mainUrl/engine/ajax/film_api.php?id=$contentId"
+            val movieDescription = FrenchStreamMetadata.cleanMovieDescription(description)
             return newMovieLoadResponse(canonicalTitle, url, TvType.Movie, apiUrl) {
                 posterUrl = poster ?: tmdbPoster
                 backgroundPosterUrl = background
                 logoUrl = logo(details)
-                plot = description.ifBlank { details?.optString("overview").orEmpty() }
+                plot = movieDescription.ifBlank { details?.optString("overview").orEmpty() }
                 year = siteYear ?: tmdbYear
                 this.tags = tags
                 duration = details?.optInt("runtime")?.takeIf { it > 0 }
