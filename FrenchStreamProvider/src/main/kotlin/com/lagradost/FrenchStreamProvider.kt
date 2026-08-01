@@ -171,9 +171,12 @@ class FrenchStreamProvider : MainAPI() {
 
     private fun actors(details: JSONObject?): List<Pair<Actor, String?>> {
         if (details == null) return emptyList()
-        return FrenchStreamMetadata.cast(details).take(30).map { cast ->
-            Actor(cast.name, FrenchStreamTmdbClient.image(cast.profilePath, "w185")) to cast.character
-        }
+        return FrenchStreamMetadata.cast(details)
+            .filter { !it.profilePath.isNullOrBlank() }
+            .take(30)
+            .map { cast ->
+                Actor(cast.name, FrenchStreamTmdbClient.image(cast.profilePath, "w342")) to cast.character
+            }
     }
 
     private fun logo(details: JSONObject?): String? {
@@ -481,17 +484,24 @@ class FrenchStreamProvider : MainAPI() {
             ?: "Unknown"
         val canonicalTitle = FrenchStreamMetadata.normalizeTitle(siteTitle)
 
-        var poster = fixUrlNull(doc.selectFirst("div.fposter img")?.attr("src"))
+        var poster = FrenchStreamMetadata.highQualityImage(
+            fixUrlNull(doc.selectFirst("div.fposter img")?.attr("src"))
+        )
         if (poster == null) {
-            poster = Regex("""url\((https?://\S+)\)""").find(doc.toString())?.groupValues?.get(1)
+            poster = FrenchStreamMetadata.highQualityImage(
+                Regex("""url\((https?://\S+)\)""").find(doc.toString())?.groupValues?.get(1)
+            )
         }
 
-        val description = doc.selectFirst("div.fdesc")?.text()
-            ?: doc.selectFirst("#s-desc")?.ownText()
-            ?: ""
-        val siteYear = doc.selectFirst("ul.flist-col li")?.text()?.toIntOrNull()
-            ?: doc.selectFirst("span.release")?.text()?.substringBefore("-")?.trim()?.toIntOrNull()
-        val siteTags = doc.select("ul.flist-col li a").map { it.text() }.filter { it.isNotBlank() }
+        val description = FrenchStreamMetadata.cleanDescription(
+            doc.selectFirst("div.fdesc")?.text() ?: doc.selectFirst("#s-desc")?.text()
+        )
+        val siteYear = FrenchStreamMetadata.year(
+            siteTitle,
+            doc.selectFirst("span.release")?.text(),
+            doc.selectFirst("meta[property=og:title]")?.attr("content")
+        )
+        val siteTags = FrenchStreamMetadata.genres(doc)
         val isSeries = siteTitle.contains("saison", ignoreCase = true)
             || doc.select("div.episodes-wrapper").isNotEmpty()
             || doc.select("#serie-config, #sv-cfg").isNotEmpty()
@@ -500,8 +510,8 @@ class FrenchStreamProvider : MainAPI() {
             (0 until genres.length()).mapNotNull { genres.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
         } ?: emptyList()
         val tags = (siteTags + tmdbTags).distinct()
-        val tmdbPoster = FrenchStreamTmdbClient.image(details?.optString("poster_path"))
-        val background = FrenchStreamTmdbClient.image(details?.optString("backdrop_path"), "w1280")
+        val tmdbPoster = FrenchStreamTmdbClient.image(details?.optString("poster_path"), "w780")
+        val background = FrenchStreamTmdbClient.image(details?.optString("backdrop_path"), "original")
         val tmdbYear = details?.optString(if (isSeries) "first_air_date" else "release_date")
             ?.take(4)?.toIntOrNull()
         val tmdbId = details?.optInt("id")?.takeIf { it > 0 }?.toString()
@@ -516,12 +526,11 @@ class FrenchStreamProvider : MainAPI() {
         if (!isSeries) {
             val contentId = extractContentId(url) ?: url
             val apiUrl = "$mainUrl/engine/ajax/film_api.php?id=$contentId"
-            val movieDescription = FrenchStreamMetadata.cleanMovieDescription(description)
             return newMovieLoadResponse(canonicalTitle, url, TvType.Movie, apiUrl) {
-                posterUrl = poster ?: tmdbPoster
+                posterUrl = tmdbPoster ?: poster
                 backgroundPosterUrl = background
                 logoUrl = logo(details)
-                plot = movieDescription.ifBlank { details?.optString("overview").orEmpty() }
+                plot = description.ifBlank { details?.optString("overview").orEmpty() }
                 year = siteYear ?: tmdbYear
                 this.tags = tags
                 duration = details?.optInt("runtime")?.takeIf { it > 0 }
@@ -548,7 +557,9 @@ class FrenchStreamProvider : MainAPI() {
                 season = item.season
                 episode = item.episode
                 this.description = metadata?.optString("overview")?.takeIf { it.isNotBlank() }
-                posterUrl = FrenchStreamTmdbClient.image(metadata?.optString("still_path")) ?: poster ?: tmdbPoster
+                posterUrl = FrenchStreamTmdbClient.image(metadata?.optString("still_path"), "w780")
+                    ?: tmdbPoster
+                    ?: poster
                 score = Score.from10(metadata?.optDouble("vote_average")?.takeIf { it > 0.0 })
                 runTime = metadata?.optInt("runtime")?.takeIf { it > 0 }
                 date = parseDate(metadata?.optString("air_date"))
@@ -556,7 +567,7 @@ class FrenchStreamProvider : MainAPI() {
         }
 
         return newTvSeriesLoadResponse(canonicalTitle, url, TvType.TvSeries, episodes) {
-            posterUrl = poster ?: tmdbPoster
+            posterUrl = tmdbPoster ?: poster
             backgroundPosterUrl = background
             logoUrl = logo(details)
             plot = description.ifBlank { details?.optString("overview").orEmpty() }

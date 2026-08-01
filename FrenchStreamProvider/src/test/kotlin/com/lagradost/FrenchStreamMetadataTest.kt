@@ -17,6 +17,64 @@ class FrenchStreamMetadataTest {
             "House of the Dragon",
             FrenchStreamMetadata.normalizeTitle("House of the Dragon Saison 2 VOSTFR")
         )
+        assertEquals("Holy Days", FrenchStreamMetadata.normalizeTitle("Holy Days - 2026"))
+        assertEquals("Silo", FrenchStreamMetadata.normalizeTitle("Silo - Saison 3 - 2024"))
+        assertEquals("Blade Runner 2049", FrenchStreamMetadata.normalizeTitle("Blade Runner 2049 - 2017"))
+        assertEquals("Blade Runner 2049", FrenchStreamMetadata.normalizeTitle("Blade Runner 2049"))
+    }
+
+    @Test
+    fun extractsYearFromTitleOrReleaseMetadata() {
+        assertEquals(2026, FrenchStreamMetadata.year("Holy Days - 2026", null))
+        assertEquals(2023, FrenchStreamMetadata.year("Silo - Saison 1", "2023 -"))
+        assertEquals(2017, FrenchStreamMetadata.year("Blade Runner 2049 - 2017", null))
+        assertNull(FrenchStreamMetadata.year("Sans date", null))
+    }
+
+    @Test
+    fun removesStreamingBoilerplateFromMovieAndSeriesDescriptions() {
+        assertEquals(
+            "Trois nonnes âgées prennent la route à la recherche de miracles.",
+            FrenchStreamMetadata.cleanDescription(
+                "Résumé du film Holy Days en streaming complet vf et vostfr hd vod gratuit " +
+                    "sans limite et sans inscription Trois nonnes âgées prennent la route à la recherche de miracles."
+            )
+        )
+        assertEquals(
+            "Une intrigue propre.",
+            FrenchStreamMetadata.cleanDescription(
+                "Resume de la serie Exemple en streaming complet VF et VOSTFR HD VOD gratuit " +
+                    "sans limite et sans inscription Une intrigue propre."
+            )
+        )
+    }
+
+    @Test
+    fun keepsOnlyGenresFromSiteMetadata() {
+        val document = Jsoup.parse(
+            """
+            <div class="facts"><span class="genres">Aventure, Comédie</span></div>
+            <ul id="s-list">
+              <li><span>Genre:</span> <a>Aventure</a>, <a>Comédie</a>, <a>Drame</a></li>
+              <li><span>Réalisateur:</span> <a>Nathalie Boltt</a></li>
+              <li><span>Acteurs:</span> <a>Judy Davis</a>, <a>Jacki Weaver</a></li>
+            </ul>
+            """.trimIndent()
+        )
+
+        assertEquals(listOf("Aventure", "Comédie", "Drame"), FrenchStreamMetadata.genres(document))
+    }
+
+    @Test
+    fun upgradesTmdbDetailImages() {
+        assertEquals(
+            "https://image.tmdb.org/t/p/w780/poster.jpg",
+            FrenchStreamMetadata.highQualityImage("https://image.tmdb.org/t/p/w300/poster.jpg")
+        )
+        assertEquals(
+            "https://other.example/poster.jpg",
+            FrenchStreamMetadata.highQualityImage("https://other.example/poster.jpg")
+        )
     }
 
     @Test
@@ -24,22 +82,6 @@ class FrenchStreamMetadataTest {
         assertEquals(3, FrenchStreamMetadata.seasonNumber("Silo - Saison 3"))
         assertEquals(12, FrenchStreamMetadata.seasonNumber("Une série saison 12 VOSTFR"))
         assertNull(FrenchStreamMetadata.seasonNumber("Une série sans numéro"))
-    }
-
-    @Test
-    fun removesFrenchStreamMovieDescriptionPrefix() {
-        assertEquals(
-            "Le véritable résumé du film commence ici.",
-            FrenchStreamMetadata.cleanMovieDescription(
-                "Résumé du film Exemple en streaming complet VF et VOSTFR HD VOD gratuit sans limite et sans inscription : Le véritable résumé du film commence ici."
-            )
-        )
-    }
-
-    @Test
-    fun keepsRegularMovieDescription() {
-        val description = "Une aventure commence dans un village isolé."
-        assertEquals(description, FrenchStreamMetadata.cleanMovieDescription(description))
     }
 
     @Test

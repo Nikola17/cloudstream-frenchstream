@@ -31,15 +31,21 @@ internal object FrenchStreamMetadata {
         """\s*(?:\[(?:VF|VOSTFR?|VFQ|VFF)(?:\s*\+\s*(?:VF|VOSTFR?|VFQ|VFF))*]|(?:VF|VOSTFR?|VFQ|VFF)(?:\s*\+\s*(?:VF|VOSTFR?|VFQ|VFF))*)\s*$""",
         RegexOption.IGNORE_CASE
     )
-    private val movieDescriptionPrefixRegex = Regex(
-        """^\s*Résumé\s+du\s+film\b.*?\ben\s+streaming\s+complet\s+vf\s+et\s+vostfr\s+hd\s+vod\s+gratuit\s+sans\s+limite\s+et\s+sans\s+inscription[\s:.,;\-–—]*""",
+    private val yearSuffixRegex = Regex(
+        """(?:\s*[-–—]\s*(?:\((?:19|20)\d{2}\)|(?:19|20)\d{2})|\s+\((?:19|20)\d{2}\))\s*$"""
+    )
+    private val yearRegex = Regex("""\b(?:19|20)\d{2}\b""")
+    private val descriptionBoilerplateRegex = Regex(
+        """^\s*r[ée]sum[ée]\s+(?:du\s+film|de\s+la\s+s[ée]rie)\s+.*?\s+en\s+streaming\s+complet.*?\bsans\s+inscription\b\s*""",
         setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
     )
+    private val tmdbImageSizeRegex = Regex("""(/t/p/)(?:w|h)\d+(/)""", RegexOption.IGNORE_CASE)
 
     fun normalizeTitle(title: String): String {
         var value = title.trim()
         value = languageSuffixRegex.replace(value, "")
         value = seasonRegex.replace(value, "")
+        value = yearSuffixRegex.replace(value, "")
         value = languageSuffixRegex.replace(value, "")
         return value.trim().trimEnd('-', '–', '—').trim()
     }
@@ -48,8 +54,32 @@ internal object FrenchStreamMetadata {
         return seasonRegex.find(title)?.groupValues?.getOrNull(1)?.toIntOrNull()
     }
 
-    fun cleanMovieDescription(description: String): String {
-        return movieDescriptionPrefixRegex.replace(description, "").trim()
+    fun year(vararg values: String?): Int? {
+        return values.asSequence()
+            .mapNotNull { value -> yearRegex.findAll(value.orEmpty()).lastOrNull()?.value?.toIntOrNull() }
+            .firstOrNull()
+    }
+
+    fun cleanDescription(description: String?): String {
+        return descriptionBoilerplateRegex.replace(description.orEmpty(), "").trim()
+    }
+
+    fun genres(document: Document): List<String> {
+        val detailGenres = document.select("#s-list li").firstOrNull { item ->
+            item.selectFirst("span")?.text()?.trim()?.startsWith("Genre", ignoreCase = true) == true
+        }?.select("a")?.map { it.text().trim() }?.filter(String::isNotBlank).orEmpty()
+        if (detailGenres.isNotEmpty()) return detailGenres.distinct()
+
+        return document.selectFirst(".facts .genres")?.text()
+            ?.split(',')
+            ?.map(String::trim)
+            ?.filter(String::isNotBlank)
+            ?.distinct()
+            .orEmpty()
+    }
+
+    fun highQualityImage(url: String?): String? {
+        return url?.let { tmdbImageSizeRegex.replace(it, "$1w780$2") }
     }
 
     fun seasonRefs(document: Document, canonicalTitle: String): List<FrenchStreamSeasonRef> {
