@@ -1,6 +1,7 @@
 package com.lagradost
 
 import com.lagradost.cloudstream3.app
+import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLEncoder
 import java.text.SimpleDateFormat
@@ -88,37 +89,32 @@ internal object FrenchStreamTmdbClient {
             "include_adult" to "false",
             "page" to safePage.toString()
         )
-        val movies = runCatching {
-            JSONObject(
-                app.get(
-                    url(
-                        "discover/movie",
-                        common + mapOf(
-                            "sort_by" to "primary_release_date.desc",
-                            "release_date.lte" to today
-                        )
-                    )
-                ).text
-            ).optJSONArray("results")
-        }.getOrNull()
-        val series = runCatching {
-            JSONObject(
-                app.get(
-                    url(
-                        "discover/tv",
-                        common + mapOf(
-                            "sort_by" to "first_air_date.desc",
-                            "first_air_date.lte" to today,
-                            "include_null_first_air_dates" to "false"
-                        )
-                    )
-                ).text
-            ).optJSONArray("results")
-        }.getOrNull()
-        val releases = FrenchStreamMetadata.hboMaxCatalogItems(
-            movies ?: org.json.JSONArray(),
-            series ?: org.json.JSONArray()
+        suspend fun discover(path: String, extra: Map<String, String>): JSONArray {
+            return runCatching {
+                JSONObject(app.get(url("discover/$path", common + extra)).text)
+                    .optJSONArray("results")
+            }.getOrNull() ?: JSONArray()
+        }
+
+        val recentMovies = discover(
+            "movie",
+            mapOf("sort_by" to "primary_release_date.desc", "release_date.lte" to today)
         )
+        val recentSeries = discover(
+            "tv",
+            mapOf(
+                "sort_by" to "first_air_date.desc",
+                "first_air_date.lte" to today,
+                "include_null_first_air_dates" to "false"
+            )
+        )
+        val popularMovies = discover("movie", mapOf("sort_by" to "popularity.desc"))
+        val popularSeries = discover("tv", mapOf("sort_by" to "popularity.desc"))
+        val recent = FrenchStreamMetadata.hboMaxCatalogItems(recentMovies, recentSeries)
+        val popular = FrenchStreamMetadata.hboMaxCatalogItems(popularMovies, popularSeries)
+            .sortedByDescending(FrenchStreamCatalogItem::popularity)
+        val releases = (recent.take(20) + popular + recent.drop(20))
+            .distinctBy { "${it.isSeries}|${it.id}" }
         if (releases.isNotEmpty()) {
             hboMaxCache[safePage] = CatalogCacheEntry(releases, now + CATALOG_CACHE_TTL_MS)
         }

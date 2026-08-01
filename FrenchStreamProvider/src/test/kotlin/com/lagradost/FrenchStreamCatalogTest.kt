@@ -40,7 +40,7 @@ class FrenchStreamCatalogTest {
         val movies = JSONArray(
             """
             [
-              {"id": 10, "title": "Film récent", "original_title": "Recent Movie", "release_date": "2026-07-24", "vote_average": 7.4},
+              {"id": 10, "title": "Film récent", "original_title": "Recent Movie", "release_date": "2026-07-24", "vote_average": 7.4, "popularity": 42.5, "poster_path": "/film.jpg"},
               {"id": 11, "title": "Film ancien", "original_title": "Old Movie", "release_date": "2026-05-10", "vote_average": 6.2}
             ]
             """.trimIndent()
@@ -60,5 +60,33 @@ class FrenchStreamCatalogTest {
         assertEquals(listOf(true, false, true, false), items.map { it.isSeries })
         assertEquals("Recent Show", items.first().originalTitle)
         assertEquals(2026, items.first().year)
+        assertEquals(42.5, items[1].popularity, 0.0)
+        assertEquals("/film.jpg", items[1].posterPath)
+    }
+
+    @Test
+    fun resolvesCatalogTitlesFromFrenchStreamSitemap() {
+        val sitemap = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+              <url><loc>https://french-stream.one/15130000-house-of-the-dragon-saison-3-2022.html</loc></url>
+              <url><loc>https://french-stream.one/15129999-spider-man-no-way-home-2021.html</loc></url>
+              <url><loc>https://french-stream.one/12-salems-lot-film-streaming-complet-vf.html</loc></url>
+            </urlset>
+        """.trimIndent()
+        val refs = FrenchStreamMetadata.sitemapRefs(sitemap)
+
+        assertEquals(
+            "https://french-stream.one/15130000-house-of-the-dragon-saison-3-2022.html",
+            FrenchStreamMetadata.sitemapMatch(refs, "House of the Dragon", null, true)?.url
+        )
+        assertEquals(
+            "https://french-stream.one/15129999-spider-man-no-way-home-2021.html",
+            FrenchStreamMetadata.sitemapMatch(refs, "Spider-Man : No Way Home", null, false)?.url
+        )
+        assertEquals(
+            "https://french-stream.one/12-salems-lot-film-streaming-complet-vf.html",
+            FrenchStreamMetadata.sitemapMatch(refs, "Salem's Lot", null, false)?.url
+        )
     }
 }

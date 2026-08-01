@@ -51,7 +51,8 @@ class FrenchStreamProvider : MainAPI() {
         RegexOption.DOT_MATCHES_ALL
     )
     private val externalHeaders = mapOf("User-Agent" to "Mozilla/5.0")
-    private val hboMaxCandidateLimit = 16
+    private val hboMaxPageSize = 20
+    private var sitemapCache: Pair<Long, List<FrenchStreamSitemapRef>>? = null
 
     private data class SiteEpisode(val season: Int, val episode: Int, val data: String)
 
@@ -399,53 +400,54 @@ class FrenchStreamProvider : MainAPI() {
     }
 
     private suspend fun hboMaxMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val releases = FrenchStreamTmdbClient.hboMaxReleases(page).take(hboMaxCandidateLimit)
-        val items = releases.chunked(4).flatMap { batch ->
-            coroutineScope {
-                batch.map { release ->
-                    async {
-                        withTimeoutOrNull(8_000L) { resolveFrenchStreamRelease(release) }
-                    }
-                }.awaitAll().filterNotNull()
-            }
-        }
+        val releases = FrenchStreamTmdbClient.hboMaxReleases(page)
+        val refs = frenchStreamSitemapRefs()
+        val items = releases.mapNotNull { release ->
+            val ref = FrenchStreamMetadata.sitemapMatch(
+                refs,
+                release.title,
+                release.originalTitle,
+                release.isSeries,
+                release.year
+            ) ?: return@mapNotNull null
+            hboMaxResult(release, ref)
+        }.let(::deduplicate).take(hboMaxPageSize)
         return newHomePageResponse(
-            HomePageList(request.name, deduplicate(items), isHorizontalImages = false),
-            hasNext = releases.size == hboMaxCandidateLimit
+            HomePageList(request.name, items, isHorizontalImages = false),
+            hasNext = items.size == hboMaxPageSize
         )
     }
 
-    private suspend fun resolveFrenchStreamRelease(release: FrenchStreamCatalogItem): SearchResponse? {
-        val queries = listOfNotNull(release.title, release.originalTitle).distinct()
-        for (query in queries) {
-            val url = "$mainUrl/?do=search&subaction=search&story=${URLEncoder.encode(query, "UTF-8")}"
-            val document = runCatching { safeGet(url).document }.getOrNull() ?: continue
-            val match = document.select("div.short")
-                .mapNotNull(::toResult)
-                .firstOrNull { result ->
-                    val expectedType = if (release.isSeries) TvType.TvSeries else TvType.Movie
-                    result.type == expectedType && (
-                        FrenchStreamMetadata.isTmdbMatch(
-                            result.name,
-                            if (release.isSeries) null else searchYear(result),
-                            release.title,
-                            release.year
-                        ) || release.originalTitle?.let { original ->
-                            FrenchStreamMetadata.isTmdbMatch(
-                                result.name,
-                                if (release.isSeries) null else searchYear(result),
-                                original,
-                                release.year
-                            )
-                        } == true
-                    )
-                }
-                ?: continue
-            match.id = release.id
-            match.score = Score.from10(release.score)
-            return match
+    private suspend fun frenchStreamSitemapRefs(): List<FrenchStreamSitemapRef> {
+        val now = System.currentTimeMillis()
+        sitemapCache?.takeIf { it.first > now }?.let { return it.second }
+        val refs = runCatching {
+            FrenchStreamMetadata.sitemapRefs(safeGet("$mainUrl/sitemap.xml").text)
+        }.getOrDefault(emptyList())
+        if (refs.isNotEmpty()) {
+            sitemapCache = (now + 30 * 60 * 1000L) to refs
         }
-        return null
+        return refs
+    }
+
+    private fun hboMaxResult(
+        release: FrenchStreamCatalogItem,
+        ref: FrenchStreamSitemapRef
+    ): SearchResponse {
+        val result = if (release.isSeries) {
+            newTvSeriesSearchResponse(release.title, ref.url, TvType.TvSeries) {
+                posterUrl = FrenchStreamTmdbClient.image(release.posterPath, "w500")
+                year = release.year
+            }
+        } else {
+            newMovieSearchResponse(release.title, ref.url, TvType.Movie) {
+                posterUrl = FrenchStreamTmdbClient.image(release.posterPath, "w500")
+                year = release.year
+            }
+        }
+        result.id = release.id
+        result.score = Score.from10(release.score)
+        return result
     }
 
     override suspend fun search(query: String): List<SearchResponse> {

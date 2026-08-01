@@ -4,7 +4,11 @@ import com.lagradost.cloudstream3.SearchQuality
 import com.lagradost.cloudstream3.ShowStatus
 import org.json.JSONArray
 import org.json.JSONObject
+import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
+import org.jsoup.parser.Parser
+import java.net.URI
+import java.net.URLDecoder
 import java.text.Normalizer
 
 internal data class FrenchStreamEpisodePayload(
@@ -31,7 +35,16 @@ internal data class FrenchStreamCatalogItem(
     val releaseDate: String,
     val year: Int?,
     val isSeries: Boolean,
-    val score: Double?
+    val score: Double?,
+    val popularity: Double,
+    val posterPath: String?
+)
+
+internal data class FrenchStreamSitemapRef(
+    val url: String,
+    val titleKey: String,
+    val year: Int?,
+    val isSeries: Boolean
 )
 
 internal object FrenchStreamMetadata {
@@ -50,6 +63,9 @@ internal object FrenchStreamMetadata {
         setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
     )
     private val tmdbImageSizeRegex = Regex("""(/t/p/)(?:w|h)\d+(/)""", RegexOption.IGNORE_CASE)
+    private val sitemapSeasonSuffixRegex = Regex("""-saison-\d+(?:-(?:19|20)\d{2})?.*$""", RegexOption.IGNORE_CASE)
+    private val sitemapStreamingSuffixRegex = Regex("""-(?:film-)?streaming.*$""", RegexOption.IGNORE_CASE)
+    private val sitemapYearSuffixRegex = Regex("""-(?:19|20)\d{2}$""")
 
     fun normalizeTitle(title: String): String {
         var value = title.trim()
@@ -254,7 +270,9 @@ internal object FrenchStreamMetadata {
                     releaseDate = releaseDate,
                     year = releaseDate.take(4).toIntOrNull(),
                     isSeries = isSeries,
-                    score = item.optDouble("vote_average").takeIf { it > 0.0 }
+                    score = item.optDouble("vote_average").takeIf { it > 0.0 },
+                    popularity = item.optDouble("popularity"),
+                    posterPath = item.optString("poster_path").trim().takeIf(String::isNotBlank)
                 )
             }
         }
@@ -262,6 +280,42 @@ internal object FrenchStreamMetadata {
         return (parse(movies, false) + parse(series, true))
             .distinctBy { "${it.isSeries}|${it.id}" }
             .sortedByDescending(FrenchStreamCatalogItem::releaseDate)
+    }
+
+    fun sitemapRefs(xml: String): List<FrenchStreamSitemapRef> {
+        return Jsoup.parse(xml, "", Parser.xmlParser()).select("loc").mapNotNull { element ->
+            val url = element.text().trim().takeIf { it.startsWith("http") } ?: return@mapNotNull null
+            val path = runCatching { URLDecoder.decode(URI(url).path, "UTF-8") }.getOrNull()
+                ?: return@mapNotNull null
+            val slug = path.substringAfterLast('/').removeSuffix(".html")
+                .replace(Regex("""^\d+-"""), "")
+            if (slug.isBlank() || slug == path) return@mapNotNull null
+            val isSeries = sitemapSeasonSuffixRegex.containsMatchIn(slug)
+            val year = Regex("""-(?:19|20)\d{2}$""").find(slug)?.value?.drop(1)?.toIntOrNull()
+            val titleSlug = if (isSeries) {
+                sitemapSeasonSuffixRegex.replace(slug, "")
+            } else {
+                sitemapYearSuffixRegex.replace(sitemapStreamingSuffixRegex.replace(slug, ""), "")
+            }
+            val key = titleKey(titleSlug.replace('-', ' ')).takeIf(String::isNotBlank)
+                ?: return@mapNotNull null
+            FrenchStreamSitemapRef(url, key, year, isSeries)
+        }
+    }
+
+    fun sitemapMatch(
+        refs: List<FrenchStreamSitemapRef>,
+        title: String,
+        originalTitle: String?,
+        isSeries: Boolean,
+        year: Int? = null
+    ): FrenchStreamSitemapRef? {
+        val keys = listOfNotNull(title, originalTitle)
+            .map { titleKey(normalizeTitle(it)) }
+            .filter(String::isNotBlank)
+            .toSet()
+        val matches = refs.filter { it.isSeries == isSeries && it.titleKey in keys }
+        return matches.firstOrNull { year != null && it.year == year } ?: matches.firstOrNull()
     }
 
     fun cast(details: JSONObject): List<FrenchStreamCastInfo> {
