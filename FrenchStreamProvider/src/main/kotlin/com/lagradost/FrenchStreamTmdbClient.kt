@@ -3,6 +3,9 @@ package com.lagradost
 import com.lagradost.cloudstream3.app
 import org.json.JSONObject
 import java.net.URLEncoder
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 
 internal object FrenchStreamTmdbClient {
@@ -10,10 +13,14 @@ internal object FrenchStreamTmdbClient {
     private const val API_KEY = "f3d757824f08ea2cff45eb8f47ca3a1e"
     private const val IMAGE_URL = "https://image.tmdb.org/t/p"
     private const val CACHE_TTL_MS = 60 * 60 * 1000L
+    private const val CATALOG_CACHE_TTL_MS = 30 * 60 * 1000L
+    private const val HBO_MAX_PROVIDER_ID = 1899
 
     private data class MatchCacheEntry(val value: JSONObject?, val expiresAt: Long)
+    private data class CatalogCacheEntry(val value: List<FrenchStreamCatalogItem>, val expiresAt: Long)
 
     private val matchCache = ConcurrentHashMap<String, MatchCacheEntry>()
+    private val hboMaxCache = ConcurrentHashMap<Int, CatalogCacheEntry>()
 
     fun image(path: String?, size: String = "w500"): String? {
         return path?.trim()?.takeIf { it.isNotBlank() }?.let { "$IMAGE_URL/$size$it" }
@@ -66,6 +73,56 @@ internal object FrenchStreamTmdbClient {
 
     suspend fun season(seriesId: Int, season: Int): JSONObject? {
         return runCatching { JSONObject(app.get(url("tv/$seriesId/season/$season")).text) }.getOrNull()
+    }
+
+    suspend fun hboMaxReleases(page: Int): List<FrenchStreamCatalogItem> {
+        val safePage = page.coerceAtLeast(1)
+        val now = System.currentTimeMillis()
+        hboMaxCache[safePage]?.takeIf { it.expiresAt > now }?.let { return it.value }
+
+        val today = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+        val common = mapOf(
+            "watch_region" to "FR",
+            "with_watch_providers" to HBO_MAX_PROVIDER_ID.toString(),
+            "with_watch_monetization_types" to "flatrate",
+            "include_adult" to "false",
+            "page" to safePage.toString()
+        )
+        val movies = runCatching {
+            JSONObject(
+                app.get(
+                    url(
+                        "discover/movie",
+                        common + mapOf(
+                            "sort_by" to "primary_release_date.desc",
+                            "release_date.lte" to today
+                        )
+                    )
+                ).text
+            ).optJSONArray("results")
+        }.getOrNull()
+        val series = runCatching {
+            JSONObject(
+                app.get(
+                    url(
+                        "discover/tv",
+                        common + mapOf(
+                            "sort_by" to "first_air_date.desc",
+                            "first_air_date.lte" to today,
+                            "include_null_first_air_dates" to "false"
+                        )
+                    )
+                ).text
+            ).optJSONArray("results")
+        }.getOrNull()
+        val releases = FrenchStreamMetadata.hboMaxCatalogItems(
+            movies ?: org.json.JSONArray(),
+            series ?: org.json.JSONArray()
+        )
+        if (releases.isNotEmpty()) {
+            hboMaxCache[safePage] = CatalogCacheEntry(releases, now + CATALOG_CACHE_TTL_MS)
+        }
+        return releases
     }
 
     private fun url(path: String, extra: Map<String, String> = emptyMap()): String {

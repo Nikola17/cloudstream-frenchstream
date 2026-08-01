@@ -23,6 +23,8 @@ import org.json.JSONObject
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
+internal const val FRENCH_STREAM_HBO_MAX_CATALOG = "external:hbo-max"
+
 class FrenchStreamProvider : MainAPI() {
     override var mainUrl = "https://french-stream.one"
     private val mirrors = listOf(
@@ -49,6 +51,7 @@ class FrenchStreamProvider : MainAPI() {
         RegexOption.DOT_MATCHES_ALL
     )
     private val externalHeaders = mapOf("User-Agent" to "Mozilla/5.0")
+    private val hboMaxCandidateLimit = 16
 
     private data class SiteEpisode(val season: Int, val episode: Int, val data: String)
 
@@ -357,6 +360,7 @@ class FrenchStreamProvider : MainAPI() {
         "s-tv" to "Dernières Séries",
         "films/top-film" to "Top Films",
         "sries-du-moment" to "Séries du moment",
+        FRENCH_STREAM_HBO_MAX_CATALOG to "Nouveautés HBO Max",
         "s-tv/netflix-series-" to "Nouveautés Netflix",
         "s-tv/series-disney-plus" to "Nouveautés Disney+",
         "s-tv/series-apple-tv" to "Nouveautés Apple TV+",
@@ -377,6 +381,9 @@ class FrenchStreamProvider : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        if (request.data == FRENCH_STREAM_HBO_MAX_CATALOG) {
+            return hboMaxMainPage(page, request)
+        }
         val url = if (page > 1) {
             "$mainUrl/${request.data}/page/$page"
         } else {
@@ -389,6 +396,56 @@ class FrenchStreamProvider : MainAPI() {
             HomePageList(request.name, items, isHorizontalImages = false),
             hasNext = items.isNotEmpty()
         )
+    }
+
+    private suspend fun hboMaxMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        val releases = FrenchStreamTmdbClient.hboMaxReleases(page).take(hboMaxCandidateLimit)
+        val items = releases.chunked(4).flatMap { batch ->
+            coroutineScope {
+                batch.map { release ->
+                    async {
+                        withTimeoutOrNull(8_000L) { resolveFrenchStreamRelease(release) }
+                    }
+                }.awaitAll().filterNotNull()
+            }
+        }
+        return newHomePageResponse(
+            HomePageList(request.name, deduplicate(items), isHorizontalImages = false),
+            hasNext = releases.size == hboMaxCandidateLimit
+        )
+    }
+
+    private suspend fun resolveFrenchStreamRelease(release: FrenchStreamCatalogItem): SearchResponse? {
+        val queries = listOfNotNull(release.title, release.originalTitle).distinct()
+        for (query in queries) {
+            val url = "$mainUrl/?do=search&subaction=search&story=${URLEncoder.encode(query, "UTF-8")}"
+            val document = runCatching { safeGet(url).document }.getOrNull() ?: continue
+            val match = document.select("div.short")
+                .mapNotNull(::toResult)
+                .firstOrNull { result ->
+                    val expectedType = if (release.isSeries) TvType.TvSeries else TvType.Movie
+                    result.type == expectedType && (
+                        FrenchStreamMetadata.isTmdbMatch(
+                            result.name,
+                            if (release.isSeries) null else searchYear(result),
+                            release.title,
+                            release.year
+                        ) || release.originalTitle?.let { original ->
+                            FrenchStreamMetadata.isTmdbMatch(
+                                result.name,
+                                if (release.isSeries) null else searchYear(result),
+                                original,
+                                release.year
+                            )
+                        } == true
+                    )
+                }
+                ?: continue
+            match.id = release.id
+            match.score = Score.from10(release.score)
+            return match
+        }
+        return null
     }
 
     override suspend fun search(query: String): List<SearchResponse> {

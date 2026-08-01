@@ -24,6 +24,16 @@ internal data class FrenchStreamCastInfo(
     val character: String?
 )
 
+internal data class FrenchStreamCatalogItem(
+    val id: Int,
+    val title: String,
+    val originalTitle: String?,
+    val releaseDate: String,
+    val year: Int?,
+    val isSeries: Boolean,
+    val score: Double?
+)
+
 internal object FrenchStreamMetadata {
     private const val PAYLOAD_KIND = "frenchstream_episode"
     private val seasonRegex = Regex("""\s*(?:-|–|—)?\s*saison\s+(\d+)\b""", RegexOption.IGNORE_CASE)
@@ -223,6 +233,35 @@ internal object FrenchStreamMetadata {
                 isTmdbMatch(siteTitle, siteYear, title, date.take(4).toIntOrNull())
             }
             .maxWithOrNull(compareBy<JSONObject> { it.optInt("vote_count") }.thenBy { it.optDouble("popularity") })
+    }
+
+    fun hboMaxCatalogItems(movies: JSONArray, series: JSONArray): List<FrenchStreamCatalogItem> {
+        fun parse(results: JSONArray, isSeries: Boolean): List<FrenchStreamCatalogItem> {
+            return (0 until results.length()).mapNotNull { index ->
+                val item = results.optJSONObject(index) ?: return@mapNotNull null
+                val translated = item.optString(if (isSeries) "name" else "title").trim()
+                val original = item.optString(if (isSeries) "original_name" else "original_title").trim()
+                val title = translated.ifBlank { original }.takeIf(String::isNotBlank) ?: return@mapNotNull null
+                val releaseDate = item.optString(if (isSeries) "first_air_date" else "release_date")
+                    .trim()
+                    .takeIf(String::isNotBlank)
+                    ?: return@mapNotNull null
+                val id = item.optInt("id").takeIf { it > 0 } ?: return@mapNotNull null
+                FrenchStreamCatalogItem(
+                    id = id,
+                    title = title,
+                    originalTitle = original.takeIf { it.isNotBlank() && !it.equals(title, ignoreCase = true) },
+                    releaseDate = releaseDate,
+                    year = releaseDate.take(4).toIntOrNull(),
+                    isSeries = isSeries,
+                    score = item.optDouble("vote_average").takeIf { it > 0.0 }
+                )
+            }
+        }
+
+        return (parse(movies, false) + parse(series, true))
+            .distinctBy { "${it.isSeries}|${it.id}" }
+            .sortedByDescending(FrenchStreamCatalogItem::releaseDate)
     }
 
     fun cast(details: JSONObject): List<FrenchStreamCastInfo> {
