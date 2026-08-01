@@ -11,6 +11,20 @@ import org.jsoup.Jsoup
 
 class FrenchStreamMetadataTest {
     @Test
+    fun extractsFrenchStreamBrowserVerificationCookie() {
+        val html = """
+            <title>Verification...</title>
+            <script>document.cookie="fsschal=1; path=/; max-age=86400";</script>
+        """.trimIndent()
+
+        assertEquals(
+            "fsschal" to "1",
+            FrenchStreamMetadata.browserVerificationCookie(html)
+        )
+        assertNull(FrenchStreamMetadata.browserVerificationCookie("<html><title>Films</title></html>"))
+    }
+
+    @Test
     fun stripsSeasonAndLanguageSuffixes() {
         assertEquals("Silo", FrenchStreamMetadata.normalizeTitle("Silo - Saison 3 [VF]"))
         assertEquals(

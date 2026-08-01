@@ -19,6 +19,7 @@ import java.net.URI
 import java.net.URLEncoder
 import java.text.SimpleDateFormat
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import org.json.JSONObject
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
@@ -53,6 +54,7 @@ class FrenchStreamProvider : MainAPI() {
     private val externalHeaders = mapOf("User-Agent" to "Mozilla/5.0")
     private val hboMaxPageSize = 20
     private var sitemapCache: Pair<Long, List<FrenchStreamSitemapRef>>? = null
+    private val siteCookies = ConcurrentHashMap<String, String>()
 
     private data class SiteEpisode(val season: Int, val episode: Int, val data: String)
 
@@ -62,12 +64,19 @@ class FrenchStreamProvider : MainAPI() {
         NOT_FOUND
     }
 
-    private suspend fun safeGet(url: String) = app.get(url).let { initial ->
+    private suspend fun verifiedGet(url: String) = app.get(url, cookies = siteCookies).let { response ->
+        if (!response.isSuccessful) return@let response
+        val cookie = FrenchStreamMetadata.browserVerificationCookie(response.text) ?: return@let response
+        siteCookies[cookie.first] = cookie.second
+        app.get(url, cookies = siteCookies)
+    }
+
+    private suspend fun safeGet(url: String) = verifiedGet(url).let { initial ->
         if (initial.isSuccessful) return@let initial
 
         var response = initial
         mirrorCandidates(url).drop(1).forEach { (candidate, origin) ->
-            response = app.get(candidate)
+            response = verifiedGet(candidate)
             if (response.isSuccessful) {
                 mainUrl = origin
                 return@let response

@@ -66,6 +66,18 @@ internal object FrenchStreamMetadata {
     private val sitemapSeasonSuffixRegex = Regex("""-saison-\d+(?:-(?:19|20)\d{2})?.*$""", RegexOption.IGNORE_CASE)
     private val sitemapStreamingSuffixRegex = Regex("""-(?:film-)?streaming.*$""", RegexOption.IGNORE_CASE)
     private val sitemapYearSuffixRegex = Regex("""-(?:19|20)\d{2}$""")
+    private val browserVerificationCookieRegex = Regex(
+        """document\.cookie\s*=\s*["']fsschal=([^;"']+)""",
+        RegexOption.IGNORE_CASE
+    )
+
+    fun browserVerificationCookie(html: String): Pair<String, String>? {
+        val value = browserVerificationCookieRegex.find(html)?.groupValues?.getOrNull(1)
+            ?.trim()
+            ?.takeIf(String::isNotBlank)
+            ?: return null
+        return "fsschal" to value
+    }
 
     fun normalizeTitle(title: String): String {
         var value = title.trim()

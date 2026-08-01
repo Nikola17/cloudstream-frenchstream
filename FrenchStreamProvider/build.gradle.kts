@@ -1,10 +1,10 @@
 import com.android.build.gradle.BaseExtension
 
-version = 12
+version = 13
 
 extensions.configure<BaseExtension>("android") {
     defaultConfig {
-        versionCode = 12
+        versionCode = 13
     }
 }
 
