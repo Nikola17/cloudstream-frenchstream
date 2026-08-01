@@ -265,20 +265,25 @@ class FrenchStreamProvider : MainAPI() {
     }
 
     private fun extractDirectVideoUrl(html: String): String? {
-        directVideoRegex.find(html)?.value?.let { return it }
-
         val packedScripts = packedScriptRegex.findAll(html).map { it.value }.toList()
         for (packed in packedScripts) {
             val unpacked = runCatching {
                 JsUnpacker(packed).takeIf { it.detect() }?.unpack()
             }.getOrNull()
-            directVideoRegex.find(unpacked ?: continue)?.value?.let { return it }
+            val script = unpacked ?: continue
+            FrenchStreamPackedPlayer.decodeFsvidSource(script)?.let { return it }
+            directVideoRegex.find(script)?.value?.let { return it }
         }
 
         val unpackedPage = runCatching {
             JsUnpacker(html).takeIf { it.detect() }?.unpack()
         }.getOrNull()
-        return directVideoRegex.find(unpackedPage ?: return null)?.value
+        if (unpackedPage != null) {
+            FrenchStreamPackedPlayer.decodeFsvidSource(unpackedPage)?.let { return it }
+            directVideoRegex.find(unpackedPage)?.value?.let { return it }
+        }
+
+        return directVideoRegex.find(html)?.value
     }
 
     private suspend fun loadDirectPackedHost(
