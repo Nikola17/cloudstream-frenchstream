@@ -19,6 +19,13 @@ internal object FrenchStreamQuality {
             .maxOrNull()
     }
 
+    fun isPlayableMediaUrl(url: String): Boolean {
+        val uri = runCatching { java.net.URI(url) }.getOrNull() ?: return false
+        val host = uri.host.orEmpty().lowercase()
+        val path = uri.path.orEmpty().lowercase()
+        return host != "fstream.top" && !host.endsWith(".fstream.top") && "/troll/" !in path
+    }
+
     fun highestHlsQuality(manifest: String): Int? {
         return Regex("""RESOLUTION\s*=\s*(\d+)x(\d+)""", RegexOption.IGNORE_CASE)
             .findAll(manifest)

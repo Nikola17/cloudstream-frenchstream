@@ -56,6 +56,12 @@ class FrenchStreamProvider : MainAPI() {
 
     private data class SiteEpisode(val season: Int, val episode: Int, val data: String)
 
+    private enum class PackedHostResult {
+        EMITTED,
+        REJECTED,
+        NOT_FOUND
+    }
+
     private suspend fun safeGet(url: String) = app.get(url).let { initial ->
         if (initial.isSuccessful) return@let initial
 
@@ -269,11 +275,14 @@ class FrenchStreamProvider : MainAPI() {
     private suspend fun loadDirectPackedHost(
         url: String,
         callback: (ExtractorLink) -> Unit
-    ): Boolean {
+    ): PackedHostResult {
         val response = runCatching {
             app.get(url, headers = externalHeaders, referer = mainUrl).text
-        }.getOrNull() ?: return false
-        val directUrl = extractDirectVideoUrl(response) ?: return false
+        }.getOrNull() ?: return PackedHostResult.NOT_FOUND
+        val directUrl = extractDirectVideoUrl(response) ?: return PackedHostResult.NOT_FOUND
+        if (!FrenchStreamQuality.isPlayableMediaUrl(directUrl)) {
+            return PackedHostResult.REJECTED
+        }
         val sourceName = sourceNameFromUrl(url)
         val origin = runCatching { URI(url) }
             .getOrNull()
@@ -292,7 +301,7 @@ class FrenchStreamProvider : MainAPI() {
             headers = streamHeaders
             this.quality = quality
         })
-        return true
+        return PackedHostResult.EMITTED
     }
 
     private suspend fun resolveQuality(directUrl: String, headers: Map<String, String>): Int {
@@ -315,9 +324,15 @@ class FrenchStreamProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val emit: (ExtractorLink) -> Unit = { callback(withLanguage(it, language)) }
-        if (loadDirectPackedHost(url, emit)) {
-            return true
+        val emit: (ExtractorLink) -> Unit = { link ->
+            if (FrenchStreamQuality.isPlayableMediaUrl(link.url)) {
+                callback(withLanguage(link, language))
+            }
+        }
+        when (loadDirectPackedHost(url, emit)) {
+            PackedHostResult.EMITTED -> return true
+            PackedHostResult.REJECTED -> return false
+            PackedHostResult.NOT_FOUND -> Unit
         }
 
         val normalized = normalizeExtractorUrl(url)
@@ -325,8 +340,10 @@ class FrenchStreamProvider : MainAPI() {
             var emitted = false
             runCatching {
                 loadExtractor(candidate, subtitleCallback) { link ->
-                    emitted = true
-                    emit(link)
+                    if (FrenchStreamQuality.isPlayableMediaUrl(link.url)) {
+                        emitted = true
+                        emit(link)
+                    }
                 }
             }
             if (emitted) return true

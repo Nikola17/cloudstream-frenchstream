@@ -53,6 +53,13 @@ class FrenchStreamQualityTest {
         assertEquals(1080, FrenchStreamQuality.highestHlsQuality(manifest))
     }
 
+    @Test
+    fun rejectsKnownShortPromoSources() {
+        assertEquals(false, FrenchStreamQuality.isPlayableMediaUrl("https://s1.fsvid.lol/troll/master.m3u8"))
+        assertEquals(false, FrenchStreamQuality.isPlayableMediaUrl("https://cdn.fstream.top/promo/video.mp4"))
+        assertEquals(true, FrenchStreamQuality.isPlayableMediaUrl("https://strm7.uqload.is/hls2/movie/master.m3u8"))
+    }
+
     private suspend fun resolved(language: String, name: String, quality: Int): FrenchStreamResolvedLink {
         return FrenchStreamResolvedLink(
             language,
