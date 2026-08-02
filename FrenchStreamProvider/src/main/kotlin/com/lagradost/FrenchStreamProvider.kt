@@ -14,6 +14,8 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import java.net.URI
 import java.net.URLEncoder
@@ -27,6 +29,7 @@ import org.jsoup.nodes.Element
 internal const val FRENCH_STREAM_HBO_MAX_CATALOG = "external:hbo-max"
 
 class FrenchStreamProvider : MainAPI() {
+    @Volatile
     override var mainUrl = "https://french-stream.one"
     private val mirrors = listOf(
         "https://french-stream.one",
@@ -53,8 +56,13 @@ class FrenchStreamProvider : MainAPI() {
     )
     private val externalHeaders = mapOf("User-Agent" to "Mozilla/5.0")
     private val hboMaxPageSize = 20
+
+    @Volatile
     private var sitemapCache: Pair<Long, List<FrenchStreamSitemapRef>>? = null
     private val siteCookies = ConcurrentHashMap<String, String>()
+
+    /** Serialise les bascules de miroir : sans ça, les 8 requêtes parallèles de [loadLinks] sondent toutes les miroirs. */
+    private val mirrorSwitchMutex = Mutex()
 
     private data class SiteEpisode(val season: Int, val episode: Int, val data: String)
 
@@ -74,15 +82,25 @@ class FrenchStreamProvider : MainAPI() {
     private suspend fun safeGet(url: String) = verifiedGet(url).let { initial ->
         if (initial.isSuccessful) return@let initial
 
-        var response = initial
-        mirrorCandidates(url).drop(1).forEach { (candidate, origin) ->
-            response = verifiedGet(candidate)
-            if (response.isSuccessful) {
-                mainUrl = origin
-                return@let response
+        mirrorSwitchMutex.withLock {
+            var response = initial
+            for ((candidate, origin) in mirrorCandidates(url).drop(1)) {
+                val attempt = verifiedGet(candidate)
+                response = attempt
+                if (attempt.isSuccessful) {
+                    mainUrl = origin
+                    break
+                }
             }
+            response
         }
-        response
+    }
+
+    /** [safeGet] puis parsing JSON tolérant : renvoie null si la réponse n'est pas du JSON exploitable. */
+    private suspend fun fetchJson(url: String): JSONObject? {
+        val response = safeGet(url)
+        if (!response.isSuccessful) return null
+        return runCatching { JSONObject(response.text) }.getOrNull()
     }
 
     private fun mirrorCandidates(url: String): List<Pair<String, String>> {
@@ -92,7 +110,8 @@ class FrenchStreamProvider : MainAPI() {
             return listOf(url to sourceOrigin)
         }
         val suffix = uri.rawPath.orEmpty() + uri.rawQuery?.let { "?$it" }.orEmpty()
-        return (listOf(sourceOrigin) + mirrors)
+        // mainUrl juste après l'origine demandée : après une bascule, on retente d'abord le miroir connu bon.
+        return (listOf(sourceOrigin, mainUrl) + mirrors)
             .distinct()
             .map { origin -> "$origin$suffix" to origin }
     }
@@ -120,28 +139,26 @@ class FrenchStreamProvider : MainAPI() {
                 || href.contains("/series/", ignoreCase = true)
                 || href.contains("/s-tv/", ignoreCase = true)
 
-        // Extract version badge: VF or VOSTFR
-        val versionText = element.selectFirst(".film-version")?.text() ?: ""
-        val hasVF = versionText.contains("VF", ignoreCase = true)
-        val hasVOSTFR = versionText.contains("VOSTFR", ignoreCase = true)
-
-        val badge = when {
-            hasVF -> " [VF]"
-            hasVOSTFR -> " [VOSTFR]"
-            else -> ""
-        }
-
         val quality = FrenchStreamMetadata.quality(
             element.selectFirst(".film-quality, .quality, .short-quality")?.text()
         )
 
         return if (isSeries) {
+            // Pas de badge de langue ici : load() fusionne les épisodes VF et VOSTFR d'une même série,
+            // afficher une seule version sur la carte serait mensonger.
             newTvSeriesSearchResponse(FrenchStreamMetadata.normalizeTitle(title), href, TvType.TvSeries) {
                 this.posterUrl = poster
                 this.year = year
                 this.quality = quality
             }
         } else {
+            // Une fiche film = une seule version, le badge est fiable.
+            val versionText = element.selectFirst(".film-version")?.text() ?: ""
+            val badge = when {
+                versionText.contains("VF", ignoreCase = true) -> " [VF]"
+                versionText.contains("VOSTFR", ignoreCase = true) -> " [VOSTFR]"
+                else -> ""
+            }
             newMovieSearchResponse(title + badge, href, TvType.Movie) {
                 this.posterUrl = poster
                 this.year = year
@@ -426,6 +443,7 @@ class FrenchStreamProvider : MainAPI() {
         enrichCards(items)
         return newHomePageResponse(
             HomePageList(request.name, items, isHorizontalImages = false),
+            // Une page hors limites renvoie un 404 sans aucune carte : items vide suffit à stopper le scroll.
             hasNext = items.isNotEmpty()
         )
     }
@@ -445,7 +463,9 @@ class FrenchStreamProvider : MainAPI() {
         }.let(::deduplicate).take(hboMaxPageSize)
         return newHomePageResponse(
             HomePageList(request.name, items, isHorizontalImages = false),
-            hasNext = items.size == hboMaxPageSize
+            // Le matching sitemap élimine la plupart des titres TMDB : se baser sur les items retenus
+            // couperait la pagination dès la première page. TMDB renvoie une liste vide hors limites.
+            hasNext = releases.isNotEmpty()
         )
     }
 
@@ -481,11 +501,17 @@ class FrenchStreamProvider : MainAPI() {
         return result
     }
 
-    override suspend fun search(query: String): List<SearchResponse> {
+    override suspend fun search(query: String): List<SearchResponse> = searchResults(query, enrich = true)
+
+    /** La recherche instantanée se déclenche à chaque frappe : on saute l'enrichissement TMDB. */
+    override suspend fun quickSearch(query: String): List<SearchResponse> =
+        searchResults(query, enrich = false).take(20)
+
+    private suspend fun searchResults(query: String, enrich: Boolean): List<SearchResponse> {
         val url = "$mainUrl/?do=search&subaction=search&story=${URLEncoder.encode(query, "UTF-8")}"
         val doc = safeGet(url).document
         val items = deduplicate(doc.select("div.short").mapNotNull { toResult(it) })
-        enrichCards(items)
+        if (enrich) enrichCards(items)
         return items
     }
 
@@ -568,10 +594,14 @@ class FrenchStreamProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val doc = safeGet(url).document
+        val response = safeGet(url)
+        if (!response.isSuccessful) {
+            throw ErrorLoadingException("French-Stream est indisponible (HTTP ${response.code})")
+        }
+        val doc = response.document
         val siteTitle = doc.selectFirst("h1#s-title")?.text()?.trim()
             ?: doc.selectFirst("h1")?.text()?.trim()
-            ?: "Unknown"
+            ?: throw ErrorLoadingException("Fiche French-Stream introuvable")
         val canonicalTitle = FrenchStreamMetadata.normalizeTitle(siteTitle)
 
         var poster = FrenchStreamMetadata.highQualityImage(
@@ -614,7 +644,8 @@ class FrenchStreamProvider : MainAPI() {
         }?.takeIf { it.isNotBlank() }
 
         if (!isSeries) {
-            val contentId = extractContentId(url) ?: url
+            val contentId = extractContentId(url)
+                ?: throw ErrorLoadingException("Identifiant French-Stream absent de l'URL")
             val apiUrl = "$mainUrl/engine/ajax/film_api.php?id=$contentId"
             return newMovieLoadResponse(canonicalTitle, url, TvType.Movie, apiUrl) {
                 posterUrl = tmdbPoster ?: poster
@@ -692,8 +723,9 @@ class FrenchStreamProvider : MainAPI() {
                 groupedLinks.getOrPut(language) { mutableListOf() }.addAll(links)
             }
         } else if (data.contains("film_api.php")) {
-            val response = safeGet(data).text
-            val json = JSONObject(response)
+            // Le site peut répondre une page de vérification navigateur ou une 404 HTML : ne pas laisser
+            // remonter la JSONException jusqu'à l'UI.
+            val json = fetchJson(data) ?: return false
             FrenchStreamMetadata.movieLinks(json).forEach { (language, links) ->
                 groupedLinks.getOrPut(language) { mutableListOf() }.addAll(links)
             }
@@ -703,8 +735,7 @@ class FrenchStreamProvider : MainAPI() {
             val epNum = parts.find { it.startsWith("ep=") }?.substringAfter("ep=") ?: return false
             val lang = parts.find { it.startsWith("lang=") }?.substringAfter("lang=") ?: "vf"
 
-            val response = safeGet(apiUrl).text
-            val json = JSONObject(response)
+            val json = fetchJson(apiUrl) ?: return false
             if (json.has(lang) && !json.isNull(lang)) {
                 val langObj = json.getJSONObject(lang)
                 if (langObj.has(epNum)) {
