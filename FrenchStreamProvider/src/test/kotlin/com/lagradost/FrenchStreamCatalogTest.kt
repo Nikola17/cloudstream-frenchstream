@@ -119,9 +119,17 @@ class FrenchStreamCatalogTest {
     }
 
     @Test
-    fun scansThreeTmdbPagesForEachHboMaxCatalogPage() {
-        assertEquals(1..3, FrenchStreamTmdbClient.hboMaxApiPages(1))
-        assertEquals(4..6, FrenchStreamTmdbClient.hboMaxApiPages(2))
+    fun scansOneTmdbPageForEachHboMaxCatalogPage() {
+        assertEquals(1..1, FrenchStreamTmdbClient.hboMaxApiPages(1))
+        assertEquals(2..2, FrenchStreamTmdbClient.hboMaxApiPages(2))
+    }
+
+    @Test
+    fun limitsHboMaxSitemapDownloadToRecentEntries() {
+        assertEquals(
+            "bytes=0-1499999",
+            FrenchStreamProvider().hboSitemapHeaders()["Range"]
+        )
     }
 
     @Test

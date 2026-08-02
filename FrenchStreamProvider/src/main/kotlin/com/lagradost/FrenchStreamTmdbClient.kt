@@ -20,7 +20,7 @@ internal object FrenchStreamTmdbClient {
     private const val CACHE_TTL_MS = 60 * 60 * 1000L
     private const val CATALOG_CACHE_TTL_MS = 30 * 60 * 1000L
     private const val HBO_MAX_PROVIDER_ID = 1899
-    private const val HBO_MAX_API_PAGES_PER_CATALOG_PAGE = 3
+    private const val HBO_MAX_API_PAGES_PER_CATALOG_PAGE = 1
 
     private data class MatchCacheEntry(val value: JSONObject?, val expiresAt: Long)
     private data class CatalogCacheEntry(val value: List<FrenchStreamCatalogItem>, val expiresAt: Long)
