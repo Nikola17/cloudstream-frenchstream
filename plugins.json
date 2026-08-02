@@ -16,16 +16,16 @@
         "name": "FrenchManga"
     },
     {
-        "fileHash": "sha256-50e7bbbf54f30fb60e53bd942dab5d6db0ea9b884fe5a3ace28230db58fbd51b",
+        "fileHash": "sha256-c8e23f1cfb45014d87645a6e2357ab4bcfd806330b5127a99bac6025f852b5bf",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Nikola17/cloudstream-frenchstream",
-        "fileSize": 91569,
+        "fileSize": 91856,
         "status": 3,
         "language": "fr",
         "authors": [
             "Nico"
         ],
-        "version": 17,
+        "version": 18,
         "internalName": "FrenchStreamProvider",
         "description": "French-Stream provider for CloudStream",
         "url": "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/builds/FrenchStreamProvider.cs3",
