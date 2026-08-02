@@ -28,11 +28,11 @@ class FrenchStreamCatalogTest {
     }
 
     @Test
-    fun placesHboMaxImmediatelyBeforeNetflix() {
+    fun placesHboMaxImmediatelyAfterNetflix() {
         val catalogs = FrenchStreamProvider().mainPage.map { it.data to it.name }
         val netflixIndex = catalogs.indexOf("s-tv/netflix-series-" to "Nouveautés Netflix")
 
-        assertEquals(FRENCH_STREAM_HBO_MAX_CATALOG to "Nouveautés HBO Max", catalogs[netflixIndex - 1])
+        assertEquals(FRENCH_STREAM_HBO_MAX_CATALOG to "Nouveautés HBO Max", catalogs[netflixIndex + 1])
     }
 
     @Test
@@ -62,6 +62,28 @@ class FrenchStreamCatalogTest {
         assertEquals(2026, items.first().year)
         assertEquals(42.5, items[1].popularity, 0.0)
         assertEquals("/film.jpg", items[1].posterPath)
+    }
+
+    @Test
+    fun ordersHboMaxCatalogByNewestReleaseRegardlessOfPopularity() {
+        // Garde-fou : un vieux blockbuster très populaire ne doit jamais passer devant une nouveauté.
+        val movies = JSONArray(
+            """
+            [
+              {"id": 1, "title": "Blockbuster ancien", "release_date": "2002-05-01", "popularity": 900.0},
+              {"id": 2, "title": "Nouveauté", "release_date": "2026-07-24", "popularity": 1.0}
+            ]
+            """.trimIndent()
+        )
+        val series = JSONArray(
+            """
+            [{"id": 3, "name": "Série culte", "first_air_date": "2011-04-17", "popularity": 800.0}]
+            """.trimIndent()
+        )
+
+        val items = FrenchStreamMetadata.hboMaxCatalogItems(movies, series)
+
+        assertEquals(listOf("Nouveauté", "Série culte", "Blockbuster ancien"), items.map { it.title })
     }
 
     @Test

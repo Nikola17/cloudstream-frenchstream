@@ -108,13 +108,11 @@ internal object FrenchStreamTmdbClient {
                 "include_null_first_air_dates" to "false"
             )
         )
-        val popularMovies = discover("movie", mapOf("sort_by" to "popularity.desc"))
-        val popularSeries = discover("tv", mapOf("sort_by" to "popularity.desc"))
-        val recent = FrenchStreamMetadata.hboMaxCatalogItems(recentMovies, recentSeries)
-        val popular = FrenchStreamMetadata.hboMaxCatalogItems(popularMovies, popularSeries)
-            .sortedByDescending(FrenchStreamCatalogItem::popularity)
-        val releases = (recent.take(20) + popular + recent.drop(20))
-            .distinctBy { "${it.isSeries}|${it.id}" }
+        // Pas de repli par popularité : il servait à densifier la ligne quand peu de nouveautés
+        // sont présentes sur le site, mais il y injectait des titres de 2002-2011 (Spider-Man,
+        // Game of Thrones, Supernatural) dans un catalogue censé lister des nouveautés.
+        // hboMaxCatalogItems trie déjà par date de sortie décroissante.
+        val releases = FrenchStreamMetadata.hboMaxCatalogItems(recentMovies, recentSeries)
         if (releases.isNotEmpty()) {
             hboMaxCache[safePage] = CatalogCacheEntry(releases, now + CATALOG_CACHE_TTL_MS)
         }

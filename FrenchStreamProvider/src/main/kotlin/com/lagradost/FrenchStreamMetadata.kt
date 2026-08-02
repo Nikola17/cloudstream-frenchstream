@@ -4,9 +4,7 @@ import com.lagradost.cloudstream3.SearchQuality
 import com.lagradost.cloudstream3.ShowStatus
 import org.json.JSONArray
 import org.json.JSONObject
-import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
-import org.jsoup.parser.Parser
 import java.net.URI
 import java.net.URLDecoder
 import java.text.Normalizer
@@ -66,6 +64,7 @@ internal object FrenchStreamMetadata {
     private val sitemapSeasonSuffixRegex = Regex("""-saison-\d+(?:-(?:19|20)\d{2})?.*$""", RegexOption.IGNORE_CASE)
     private val sitemapStreamingSuffixRegex = Regex("""-(?:film-)?streaming.*$""", RegexOption.IGNORE_CASE)
     private val sitemapYearSuffixRegex = Regex("""-(?:19|20)\d{2}$""")
+    private val sitemapLocRegex = Regex("""<loc>([^<]+)</loc>""", RegexOption.IGNORE_CASE)
     private val browserVerificationCookieRegex = Regex(
         """document\.cookie\s*=\s*["']fsschal=([^;"']+)""",
         RegexOption.IGNORE_CASE
@@ -294,9 +293,14 @@ internal object FrenchStreamMetadata {
             .sortedByDescending(FrenchStreamCatalogItem::releaseDate)
     }
 
+    /**
+     * Le sitemap du site pèse ~7,5 Mo pour ~42 000 URLs : on extrait les <loc> au fil du texte
+     * plutôt que de construire un DOM XML complet, inutilement coûteux en mémoire sur mobile.
+     */
     fun sitemapRefs(xml: String): List<FrenchStreamSitemapRef> {
-        return Jsoup.parse(xml, "", Parser.xmlParser()).select("loc").mapNotNull { element ->
-            val url = element.text().trim().takeIf { it.startsWith("http") } ?: return@mapNotNull null
+        return sitemapLocRegex.findAll(xml).mapNotNull { match ->
+            val url = decodeXmlEntities(match.groupValues[1].trim()).takeIf { it.startsWith("http") }
+                ?: return@mapNotNull null
             val path = runCatching { URLDecoder.decode(URI(url).path, "UTF-8") }.getOrNull()
                 ?: return@mapNotNull null
             val slug = path.substringAfterLast('/').removeSuffix(".html")
@@ -312,7 +316,17 @@ internal object FrenchStreamMetadata {
             val key = titleKey(titleSlug.replace('-', ' ')).takeIf(String::isNotBlank)
                 ?: return@mapNotNull null
             FrenchStreamSitemapRef(url, key, year, isSeries)
-        }
+        }.toList()
+    }
+
+    private fun decodeXmlEntities(value: String): String {
+        if ('&' !in value) return value
+        return value
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&apos;", "'")
+            .replace("&amp;", "&")
     }
 
     fun sitemapMatch(
