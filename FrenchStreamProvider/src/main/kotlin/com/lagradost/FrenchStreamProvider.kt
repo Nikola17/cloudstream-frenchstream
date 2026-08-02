@@ -72,29 +72,32 @@ class FrenchStreamProvider : MainAPI() {
         NOT_FOUND
     }
 
-    private suspend fun verifiedGet(url: String) = app.get(url, cookies = siteCookies).let { response ->
-        if (!response.isSuccessful) return@let response
-        val cookie = FrenchStreamMetadata.browserVerificationCookie(response.text) ?: return@let response
-        siteCookies[cookie.first] = cookie.second
-        app.get(url, cookies = siteCookies)
-    }
-
-    private suspend fun safeGet(url: String) = verifiedGet(url).let { initial ->
-        if (initial.isSuccessful) return@let initial
-
-        mirrorSwitchMutex.withLock {
-            var response = initial
-            for ((candidate, origin) in mirrorCandidates(url).drop(1)) {
-                val attempt = verifiedGet(candidate)
-                response = attempt
-                if (attempt.isSuccessful) {
-                    mainUrl = origin
-                    break
-                }
-            }
-            response
+    private suspend fun verifiedGet(url: String, allowLargeBody: Boolean = false) =
+        app.get(url, cookies = siteCookies).let { response ->
+            if (!response.isSuccessful) return@let response
+            val text = if (allowLargeBody) response.textLarge else response.text
+            val cookie = FrenchStreamMetadata.browserVerificationCookie(text) ?: return@let response
+            siteCookies[cookie.first] = cookie.second
+            app.get(url, cookies = siteCookies)
         }
-    }
+
+    private suspend fun safeGet(url: String, allowLargeBody: Boolean = false) =
+        verifiedGet(url, allowLargeBody).let { initial ->
+            if (initial.isSuccessful) return@let initial
+
+            mirrorSwitchMutex.withLock {
+                var response = initial
+                for ((candidate, origin) in mirrorCandidates(url).drop(1)) {
+                    val attempt = verifiedGet(candidate, allowLargeBody)
+                    response = attempt
+                    if (attempt.isSuccessful) {
+                        mainUrl = origin
+                        break
+                    }
+                }
+                response
+            }
+        }
 
     /** [safeGet] puis parsing JSON tolérant : renvoie null si la réponse n'est pas du JSON exploitable. */
     private suspend fun fetchJson(url: String): JSONObject? {
@@ -473,7 +476,9 @@ class FrenchStreamProvider : MainAPI() {
         val now = System.currentTimeMillis()
         sitemapCache?.takeIf { it.first > now }?.let { return it.second }
         val refs = runCatching {
-            FrenchStreamMetadata.sitemapRefs(safeGet("$mainUrl/sitemap.xml").text)
+            FrenchStreamMetadata.sitemapRefs(
+                safeGet("$mainUrl/sitemap.xml", allowLargeBody = true).textLarge
+            )
         }.getOrDefault(emptyList())
         if (refs.isNotEmpty()) {
             sitemapCache = (now + 30 * 60 * 1000L) to refs

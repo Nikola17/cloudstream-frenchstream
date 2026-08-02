@@ -87,6 +87,44 @@ class FrenchStreamCatalogTest {
     }
 
     @Test
+    fun completesHboMaxReleasesWithRecentPopularTitlesOnly() {
+        val recentMovies = JSONArray(
+            """[{"id":1,"title":"Documentaire récent","release_date":"2026-08-01"}]"""
+        )
+        val recentSeries = JSONArray()
+        val popularMovies = JSONArray(
+            """
+            [
+              {"id":2,"title":"Film HBO récent","release_date":"2026-07-15","popularity":300.0},
+              {"id":3,"title":"Vieux blockbuster","release_date":"2002-05-01","popularity":900.0}
+            ]
+            """.trimIndent()
+        )
+        val popularSeries = JSONArray(
+            """[{"id":4,"name":"Série HBO récente","first_air_date":"2025-11-10","popularity":250.0}]"""
+        )
+
+        val items = FrenchStreamMetadata.hboMaxCatalogCandidates(
+            recentMovies,
+            recentSeries,
+            popularMovies,
+            popularSeries,
+            earliestPopularDate = "2024-08-02"
+        )
+
+        assertEquals(
+            listOf("Documentaire récent", "Film HBO récent", "Série HBO récente"),
+            items.map { it.title }
+        )
+    }
+
+    @Test
+    fun scansThreeTmdbPagesForEachHboMaxCatalogPage() {
+        assertEquals(1..3, FrenchStreamTmdbClient.hboMaxApiPages(1))
+        assertEquals(4..6, FrenchStreamTmdbClient.hboMaxApiPages(2))
+    }
+
+    @Test
     fun resolvesCatalogTitlesFromFrenchStreamSitemap() {
         val sitemap = """
             <?xml version="1.0" encoding="UTF-8"?>

@@ -1,10 +1,14 @@
 package com.lagradost
 
 import com.lagradost.cloudstream3.app
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLEncoder
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
@@ -16,6 +20,7 @@ internal object FrenchStreamTmdbClient {
     private const val CACHE_TTL_MS = 60 * 60 * 1000L
     private const val CATALOG_CACHE_TTL_MS = 30 * 60 * 1000L
     private const val HBO_MAX_PROVIDER_ID = 1899
+    private const val HBO_MAX_API_PAGES_PER_CATALOG_PAGE = 3
 
     private data class MatchCacheEntry(val value: JSONObject?, val expiresAt: Long)
     private data class CatalogCacheEntry(val value: List<FrenchStreamCatalogItem>, val expiresAt: Long)
@@ -81,42 +86,94 @@ internal object FrenchStreamTmdbClient {
         val now = System.currentTimeMillis()
         hboMaxCache[safePage]?.takeIf { it.expiresAt > now }?.let { return it.value }
 
-        val today = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+        val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+        val today = dateFormat.format(Date())
+        val earliestPopularDate = Calendar.getInstance().apply {
+            add(Calendar.YEAR, -2)
+        }.let { dateFormat.format(it.time) }
         val common = mapOf(
             "watch_region" to "FR",
             "with_watch_providers" to HBO_MAX_PROVIDER_ID.toString(),
             "with_watch_monetization_types" to "flatrate",
-            "include_adult" to "false",
-            "page" to safePage.toString()
+            "include_adult" to "false"
         )
-        suspend fun discover(path: String, extra: Map<String, String>): JSONArray {
-            return runCatching {
-                JSONObject(app.get(url("discover/$path", common + extra)).text)
-                    .optJSONArray("results")
-            }.getOrNull() ?: JSONArray()
+        suspend fun discover(path: String, extra: Map<String, String>): JSONArray = coroutineScope {
+            val pages = hboMaxApiPages(safePage).map { apiPage ->
+                async {
+                    runCatching {
+                        JSONObject(
+                            app.get(
+                                url("discover/$path", common + extra + ("page" to apiPage.toString()))
+                            ).text
+                        ).optJSONArray("results")
+                    }.getOrNull() ?: JSONArray()
+                }
+            }.awaitAll()
+            JSONArray().also { merged ->
+                pages.forEach { results ->
+                    for (index in 0 until results.length()) merged.put(results.opt(index))
+                }
+            }
         }
 
-        val recentMovies = discover(
-            "movie",
-            mapOf("sort_by" to "primary_release_date.desc", "release_date.lte" to today)
+        val datasets = coroutineScope {
+            listOf(
+                async {
+                    discover(
+                        "movie",
+                        mapOf("sort_by" to "primary_release_date.desc", "release_date.lte" to today)
+                    )
+                },
+                async {
+                    discover(
+                        "tv",
+                        mapOf(
+                            "sort_by" to "first_air_date.desc",
+                            "first_air_date.lte" to today,
+                            "include_null_first_air_dates" to "false"
+                        )
+                    )
+                },
+                async {
+                    discover(
+                        "movie",
+                        mapOf(
+                            "sort_by" to "popularity.desc",
+                            "release_date.gte" to earliestPopularDate,
+                            "release_date.lte" to today
+                        )
+                    )
+                },
+                async {
+                    discover(
+                        "tv",
+                        mapOf(
+                            "sort_by" to "popularity.desc",
+                            "first_air_date.gte" to earliestPopularDate,
+                            "first_air_date.lte" to today,
+                            "include_null_first_air_dates" to "false"
+                        )
+                    )
+                }
+            ).awaitAll()
+        }
+        val releases = FrenchStreamMetadata.hboMaxCatalogCandidates(
+            recentMovies = datasets[0],
+            recentSeries = datasets[1],
+            popularMovies = datasets[2],
+            popularSeries = datasets[3],
+            earliestPopularDate = earliestPopularDate
         )
-        val recentSeries = discover(
-            "tv",
-            mapOf(
-                "sort_by" to "first_air_date.desc",
-                "first_air_date.lte" to today,
-                "include_null_first_air_dates" to "false"
-            )
-        )
-        // Pas de repli par popularité : il servait à densifier la ligne quand peu de nouveautés
-        // sont présentes sur le site, mais il y injectait des titres de 2002-2011 (Spider-Man,
-        // Game of Thrones, Supernatural) dans un catalogue censé lister des nouveautés.
-        // hboMaxCatalogItems trie déjà par date de sortie décroissante.
-        val releases = FrenchStreamMetadata.hboMaxCatalogItems(recentMovies, recentSeries)
         if (releases.isNotEmpty()) {
             hboMaxCache[safePage] = CatalogCacheEntry(releases, now + CATALOG_CACHE_TTL_MS)
         }
         return releases
+    }
+
+    fun hboMaxApiPages(catalogPage: Int): IntRange {
+        val safePage = catalogPage.coerceAtLeast(1)
+        val first = (safePage - 1) * HBO_MAX_API_PAGES_PER_CATALOG_PAGE + 1
+        return first until first + HBO_MAX_API_PAGES_PER_CATALOG_PAGE
     }
 
     private fun url(path: String, extra: Map<String, String> = emptyMap()): String {

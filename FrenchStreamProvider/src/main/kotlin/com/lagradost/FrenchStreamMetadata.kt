@@ -293,6 +293,21 @@ internal object FrenchStreamMetadata {
             .sortedByDescending(FrenchStreamCatalogItem::releaseDate)
     }
 
+    fun hboMaxCatalogCandidates(
+        recentMovies: JSONArray,
+        recentSeries: JSONArray,
+        popularMovies: JSONArray,
+        popularSeries: JSONArray,
+        earliestPopularDate: String
+    ): List<FrenchStreamCatalogItem> {
+        val recent = hboMaxCatalogItems(recentMovies, recentSeries)
+        val popular = hboMaxCatalogItems(popularMovies, popularSeries)
+            .filter { it.releaseDate >= earliestPopularDate }
+        return (recent + popular)
+            .distinctBy { "${it.isSeries}|${it.id}" }
+            .sortedByDescending(FrenchStreamCatalogItem::releaseDate)
+    }
+
     /**
      * Le sitemap du site pèse ~7,5 Mo pour ~42 000 URLs : on extrait les <loc> au fil du texte
      * plutôt que de construire un DOM XML complet, inutilement coûteux en mémoire sur mobile.
