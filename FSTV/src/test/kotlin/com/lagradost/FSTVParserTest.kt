@@ -7,6 +7,20 @@ import org.junit.Test
 
 class FSTVParserTest {
     @Test
+    fun exposesOnlyThePagePrimaryStreamForPlayback() {
+        val config = FSTVPlayerConfig(
+            name = "Bein Sport 1",
+            streamUrl = "https://fstv.rest/live.php?dl=116",
+            posterUrl = null
+        )
+
+        assertEquals(
+            listOf(FSTVPlaybackSource("Direct", config.streamUrl, 576)),
+            FSTVParser.playbackSources(config, 576)
+        )
+    }
+
+    @Test
     fun keepsSportAndCinemaCatalogsFirst() {
         assertEquals(
             listOf("sport", "cinema", "generaliste", "enfants", "documentaire", "musique", "information"),

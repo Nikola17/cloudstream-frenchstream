@@ -98,18 +98,11 @@ class FSTVProvider : MainAPI() {
             }.getOrNull()
         } ?: Qualities.Unknown.value
 
-        callback(newExtractorLink(name, "Direct", config.streamUrl, ExtractorLinkType.M3U8) {
-            referer = document.baseUri()
-            headers = streamHeaders
-            quality = primaryQuality
-        })
-
-        loadAlternativeSources(config.name, origin).take(12).forEach { source ->
-            val sourceUrl = "$origin/live.php?id=${encode(source.id)}"
-            callback(newExtractorLink(name, source.label.ifBlank { "Source TV" }, sourceUrl, ExtractorLinkType.M3U8) {
+        FSTVParser.playbackSources(config, primaryQuality).forEach { source ->
+            callback(newExtractorLink(name, source.label, source.url, ExtractorLinkType.M3U8) {
                 referer = document.baseUri()
                 headers = streamHeaders
-                quality = source.quality.takeIf { it > 0 } ?: Qualities.Unknown.value
+                quality = source.quality
             })
         }
         return true
@@ -135,20 +128,6 @@ class FSTVProvider : MainAPI() {
                 )
             }.getOrNull()
         }
-    }
-
-    private suspend fun loadAlternativeSources(channelName: String, origin: String): List<FSTVSource> {
-        return withTimeoutOrNull(4_000L) {
-            runCatching {
-                FSTVParser.sources(
-                    app.get(
-                        "$origin/live.php?q=1&sources=${encode(channelName)}",
-                        headers = browserHeaders,
-                        timeout = 4L
-                    ).text
-                )
-            }.getOrNull()
-        }.orEmpty()
     }
 
     private suspend fun getFstvDocument(url: String): Document {

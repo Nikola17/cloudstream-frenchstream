@@ -5,8 +5,6 @@ import com.lagradost.cloudstream3.ShowStatus
 import org.json.JSONArray
 import org.json.JSONObject
 import org.jsoup.nodes.Document
-import java.net.URI
-import java.net.URLDecoder
 import java.text.Normalizer
 
 internal data class FrenchStreamEpisodePayload(
@@ -26,25 +24,6 @@ internal data class FrenchStreamCastInfo(
     val character: String?
 )
 
-internal data class FrenchStreamCatalogItem(
-    val id: Int,
-    val title: String,
-    val originalTitle: String?,
-    val releaseDate: String,
-    val year: Int?,
-    val isSeries: Boolean,
-    val score: Double?,
-    val popularity: Double,
-    val posterPath: String?
-)
-
-internal data class FrenchStreamSitemapRef(
-    val url: String,
-    val titleKey: String,
-    val year: Int?,
-    val isSeries: Boolean
-)
-
 internal object FrenchStreamMetadata {
     private const val PAYLOAD_KIND = "frenchstream_episode"
     private val seasonRegex = Regex("""\s*(?:-|–|—)?\s*saison\s+(\d+)\b""", RegexOption.IGNORE_CASE)
@@ -61,10 +40,6 @@ internal object FrenchStreamMetadata {
         setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
     )
     private val tmdbImageSizeRegex = Regex("""(/t/p/)(?:w|h)\d+(/)""", RegexOption.IGNORE_CASE)
-    private val sitemapSeasonSuffixRegex = Regex("""-saison-\d+(?:-(?:19|20)\d{2})?.*$""", RegexOption.IGNORE_CASE)
-    private val sitemapStreamingSuffixRegex = Regex("""-(?:film-)?streaming.*$""", RegexOption.IGNORE_CASE)
-    private val sitemapYearSuffixRegex = Regex("""-(?:19|20)\d{2}$""")
-    private val sitemapLocRegex = Regex("""<loc>([^<]+)</loc>""", RegexOption.IGNORE_CASE)
     private val browserVerificationCookieRegex = Regex(
         """document\.cookie\s*=\s*["']fsschal=([^;"']+)""",
         RegexOption.IGNORE_CASE
@@ -260,103 +235,6 @@ internal object FrenchStreamMetadata {
                 isTmdbMatch(siteTitle, siteYear, title, date.take(4).toIntOrNull())
             }
             .maxWithOrNull(compareBy<JSONObject> { it.optInt("vote_count") }.thenBy { it.optDouble("popularity") })
-    }
-
-    fun hboMaxCatalogItems(movies: JSONArray, series: JSONArray): List<FrenchStreamCatalogItem> {
-        fun parse(results: JSONArray, isSeries: Boolean): List<FrenchStreamCatalogItem> {
-            return (0 until results.length()).mapNotNull { index ->
-                val item = results.optJSONObject(index) ?: return@mapNotNull null
-                val translated = item.optString(if (isSeries) "name" else "title").trim()
-                val original = item.optString(if (isSeries) "original_name" else "original_title").trim()
-                val title = translated.ifBlank { original }.takeIf(String::isNotBlank) ?: return@mapNotNull null
-                val releaseDate = item.optString(if (isSeries) "first_air_date" else "release_date")
-                    .trim()
-                    .takeIf(String::isNotBlank)
-                    ?: return@mapNotNull null
-                val id = item.optInt("id").takeIf { it > 0 } ?: return@mapNotNull null
-                FrenchStreamCatalogItem(
-                    id = id,
-                    title = title,
-                    originalTitle = original.takeIf { it.isNotBlank() && !it.equals(title, ignoreCase = true) },
-                    releaseDate = releaseDate,
-                    year = releaseDate.take(4).toIntOrNull(),
-                    isSeries = isSeries,
-                    score = item.optDouble("vote_average").takeIf { it > 0.0 },
-                    popularity = item.optDouble("popularity"),
-                    posterPath = item.optString("poster_path").trim().takeIf(String::isNotBlank)
-                )
-            }
-        }
-
-        return (parse(movies, false) + parse(series, true))
-            .distinctBy { "${it.isSeries}|${it.id}" }
-            .sortedByDescending(FrenchStreamCatalogItem::releaseDate)
-    }
-
-    fun hboMaxCatalogCandidates(
-        recentMovies: JSONArray,
-        recentSeries: JSONArray,
-        popularMovies: JSONArray,
-        popularSeries: JSONArray,
-        earliestPopularDate: String
-    ): List<FrenchStreamCatalogItem> {
-        val recent = hboMaxCatalogItems(recentMovies, recentSeries)
-        val popular = hboMaxCatalogItems(popularMovies, popularSeries)
-            .filter { it.releaseDate >= earliestPopularDate }
-        return (recent + popular)
-            .distinctBy { "${it.isSeries}|${it.id}" }
-            .sortedByDescending(FrenchStreamCatalogItem::releaseDate)
-    }
-
-    /**
-     * Le sitemap du site pèse ~7,5 Mo pour ~42 000 URLs : on extrait les <loc> au fil du texte
-     * plutôt que de construire un DOM XML complet, inutilement coûteux en mémoire sur mobile.
-     */
-    fun sitemapRefs(xml: String): List<FrenchStreamSitemapRef> {
-        return sitemapLocRegex.findAll(xml).mapNotNull { match ->
-            val url = decodeXmlEntities(match.groupValues[1].trim()).takeIf { it.startsWith("http") }
-                ?: return@mapNotNull null
-            val path = runCatching { URLDecoder.decode(URI(url).path, "UTF-8") }.getOrNull()
-                ?: return@mapNotNull null
-            val slug = path.substringAfterLast('/').removeSuffix(".html")
-                .replace(Regex("""^\d+-"""), "")
-            if (slug.isBlank() || slug == path) return@mapNotNull null
-            val isSeries = sitemapSeasonSuffixRegex.containsMatchIn(slug)
-            val year = Regex("""-(?:19|20)\d{2}$""").find(slug)?.value?.drop(1)?.toIntOrNull()
-            val titleSlug = if (isSeries) {
-                sitemapSeasonSuffixRegex.replace(slug, "")
-            } else {
-                sitemapYearSuffixRegex.replace(sitemapStreamingSuffixRegex.replace(slug, ""), "")
-            }
-            val key = titleKey(titleSlug.replace('-', ' ')).takeIf(String::isNotBlank)
-                ?: return@mapNotNull null
-            FrenchStreamSitemapRef(url, key, year, isSeries)
-        }.toList()
-    }
-
-    private fun decodeXmlEntities(value: String): String {
-        if ('&' !in value) return value
-        return value
-            .replace("&lt;", "<")
-            .replace("&gt;", ">")
-            .replace("&quot;", "\"")
-            .replace("&apos;", "'")
-            .replace("&amp;", "&")
-    }
-
-    fun sitemapMatch(
-        refs: List<FrenchStreamSitemapRef>,
-        title: String,
-        originalTitle: String?,
-        isSeries: Boolean,
-        year: Int? = null
-    ): FrenchStreamSitemapRef? {
-        val keys = listOfNotNull(title, originalTitle)
-            .map { titleKey(normalizeTitle(it)) }
-            .filter(String::isNotBlank)
-            .toSet()
-        val matches = refs.filter { it.isSeries == isSeries && it.titleKey in keys }
-        return matches.firstOrNull { year != null && it.year == year } ?: matches.firstOrNull()
     }
 
     fun cast(details: JSONObject): List<FrenchStreamCastInfo> {

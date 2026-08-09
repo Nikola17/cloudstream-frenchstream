@@ -26,8 +26,6 @@ import org.json.JSONObject
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
-internal const val FRENCH_STREAM_HBO_MAX_CATALOG = "external:hbo-max"
-
 class FrenchStreamProvider : MainAPI() {
     @Volatile
     override var mainUrl = "https://french-stream.one"
@@ -55,10 +53,6 @@ class FrenchStreamProvider : MainAPI() {
         RegexOption.DOT_MATCHES_ALL
     )
     private val externalHeaders = mapOf("User-Agent" to "Mozilla/5.0")
-    private val hboMaxPageSize = 20
-
-    @Volatile
-    private var sitemapCache: Pair<Long, List<FrenchStreamSitemapRef>>? = null
     private val siteCookies = ConcurrentHashMap<String, String>()
 
     /** Serialise les bascules de miroir : sans ça, les 8 requêtes parallèles de [loadLinks] sondent toutes les miroirs. */
@@ -72,29 +66,20 @@ class FrenchStreamProvider : MainAPI() {
         NOT_FOUND
     }
 
-    private suspend fun verifiedGet(
-        url: String,
-        headers: Map<String, String> = emptyMap(),
-        allowLargeBody: Boolean = false
-    ) = app.get(url, headers = headers, cookies = siteCookies).let { response ->
+    private suspend fun verifiedGet(url: String) = app.get(url, cookies = siteCookies).let { response ->
         if (!response.isSuccessful) return@let response
-        val text = if (allowLargeBody) response.textLarge else response.text
-        val cookie = FrenchStreamMetadata.browserVerificationCookie(text) ?: return@let response
+        val cookie = FrenchStreamMetadata.browserVerificationCookie(response.text) ?: return@let response
         siteCookies[cookie.first] = cookie.second
-        app.get(url, headers = headers, cookies = siteCookies)
+        app.get(url, cookies = siteCookies)
     }
 
-    private suspend fun safeGet(
-        url: String,
-        headers: Map<String, String> = emptyMap(),
-        allowLargeBody: Boolean = false
-    ) = verifiedGet(url, headers, allowLargeBody).let { initial ->
+    private suspend fun safeGet(url: String) = verifiedGet(url).let { initial ->
         if (initial.isSuccessful) return@let initial
 
         mirrorSwitchMutex.withLock {
             var response = initial
             for ((candidate, origin) in mirrorCandidates(url).drop(1)) {
-                val attempt = verifiedGet(candidate, headers, allowLargeBody)
+                val attempt = verifiedGet(candidate)
                 response = attempt
                 if (attempt.isSuccessful) {
                     mainUrl = origin
@@ -187,21 +172,15 @@ class FrenchStreamProvider : MainAPI() {
     }
 
     private suspend fun enrichCards(items: List<SearchResponse>) {
-        withTimeoutOrNull(3_000L) {
-            for (batch in items.chunked(8)) {
-                coroutineScope {
-                    batch.map { item ->
-                        async {
-                            val match = FrenchStreamTmdbClient.find(
-                                item.name,
-                                searchYear(item),
-                                item.type == TvType.TvSeries
-                            ) ?: return@async
-                            item.id = match.optInt("id").takeIf { it > 0 }
-                            item.score = Score.from10(match.optDouble("vote_average").takeIf { it > 0.0 })
-                        }
-                    }.awaitAll()
-                }
+        withTimeoutOrNull(FrenchStreamCardEnrichment.TIMEOUT_MS) {
+            FrenchStreamCardEnrichment.forEachConcurrent(items) { item ->
+                val match = FrenchStreamTmdbClient.find(
+                    item.name,
+                    searchYear(item),
+                    item.type == TvType.TvSeries
+                ) ?: return@forEachConcurrent
+                item.id = match.optInt("id").takeIf { it > 0 }
+                item.score = Score.from10(match.optDouble("vote_average").takeIf { it > 0.0 })
             }
         }
     }
@@ -419,7 +398,6 @@ class FrenchStreamProvider : MainAPI() {
         "films/top-film" to "Top Films",
         "sries-du-moment" to "Séries du moment",
         "s-tv/netflix-series-" to "Nouveautés Netflix",
-        FRENCH_STREAM_HBO_MAX_CATALOG to "Nouveautés HBO Max",
         "s-tv/series-disney-plus" to "Nouveautés Disney+",
         "s-tv/series-apple-tv" to "Nouveautés Apple TV+",
         "s-tv/serie-amazon-prime-videos" to "Nouveautés Prime Video",
@@ -439,9 +417,6 @@ class FrenchStreamProvider : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        if (request.data == FRENCH_STREAM_HBO_MAX_CATALOG) {
-            return hboMaxMainPage(page, request)
-        }
         val url = if (page > 1) {
             "$mainUrl/${request.data}/page/$page"
         } else {
@@ -455,68 +430,6 @@ class FrenchStreamProvider : MainAPI() {
             // Une page hors limites renvoie un 404 sans aucune carte : items vide suffit à stopper le scroll.
             hasNext = items.isNotEmpty()
         )
-    }
-
-    private suspend fun hboMaxMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val releases = FrenchStreamTmdbClient.hboMaxReleases(page)
-        val refs = frenchStreamSitemapRefs()
-        val items = releases.mapNotNull { release ->
-            val ref = FrenchStreamMetadata.sitemapMatch(
-                refs,
-                release.title,
-                release.originalTitle,
-                release.isSeries,
-                release.year
-            ) ?: return@mapNotNull null
-            hboMaxResult(release, ref)
-        }.let(::deduplicate).take(hboMaxPageSize)
-        return newHomePageResponse(
-            HomePageList(request.name, items, isHorizontalImages = false),
-            // Le matching sitemap élimine la plupart des titres TMDB : se baser sur les items retenus
-            // couperait la pagination dès la première page. TMDB renvoie une liste vide hors limites.
-            hasNext = releases.isNotEmpty()
-        )
-    }
-
-    private suspend fun frenchStreamSitemapRefs(): List<FrenchStreamSitemapRef> {
-        val now = System.currentTimeMillis()
-        sitemapCache?.takeIf { it.first > now }?.let { return it.second }
-        val refs = runCatching {
-            FrenchStreamMetadata.sitemapRefs(
-                safeGet(
-                    "$mainUrl/sitemap.xml",
-                    headers = hboSitemapHeaders(),
-                    allowLargeBody = true
-                ).textLarge
-            )
-        }.getOrDefault(emptyList())
-        if (refs.isNotEmpty()) {
-            sitemapCache = (now + 30 * 60 * 1000L) to refs
-        }
-        return refs
-    }
-
-    internal fun hboSitemapHeaders(): Map<String, String> =
-        mapOf("Range" to "bytes=0-1499999")
-
-    private fun hboMaxResult(
-        release: FrenchStreamCatalogItem,
-        ref: FrenchStreamSitemapRef
-    ): SearchResponse {
-        val result = if (release.isSeries) {
-            newTvSeriesSearchResponse(release.title, ref.url, TvType.TvSeries) {
-                posterUrl = FrenchStreamTmdbClient.image(release.posterPath, "w500")
-                year = release.year
-            }
-        } else {
-            newMovieSearchResponse(release.title, ref.url, TvType.Movie) {
-                posterUrl = FrenchStreamTmdbClient.image(release.posterPath, "w500")
-                year = release.year
-            }
-        }
-        result.id = release.id
-        result.score = Score.from10(release.score)
-        return result
     }
 
     override suspend fun search(query: String): List<SearchResponse> = searchResults(query, enrich = true)

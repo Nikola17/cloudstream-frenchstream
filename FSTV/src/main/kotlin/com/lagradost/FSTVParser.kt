@@ -25,6 +25,12 @@ internal data class FSTVSource(
     val label: String
 )
 
+internal data class FSTVPlaybackSource(
+    val label: String,
+    val url: String,
+    val quality: Int
+)
+
 internal data class FSTVProgram(
     val currentTitle: String,
     val category: String?,
@@ -85,6 +91,10 @@ internal object FSTVParser {
                 ?: image.absUrl("data-src").takeIf(::isHttpUrl)
         } else null
         return FSTVPlayerConfig(name, streamUrl, poster)
+    }
+
+    fun playbackSources(config: FSTVPlayerConfig, primaryQuality: Int): List<FSTVPlaybackSource> {
+        return listOf(FSTVPlaybackSource("Direct", config.streamUrl, primaryQuality))
     }
 
     fun sources(json: String): List<FSTVSource> {
