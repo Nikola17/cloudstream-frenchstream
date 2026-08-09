@@ -16,32 +16,32 @@
         "name": "FrenchManga"
     },
     {
-        "fileHash": "sha256-c8e23f1cfb45014d87645a6e2357ab4bcfd806330b5127a99bac6025f852b5bf",
+        "fileHash": "sha256-3fdc8268521655f59490e31f145fa976058ae7414c486eb89ed84901c05a25a9",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Nikola17/cloudstream-frenchstream",
-        "fileSize": 91856,
+        "fileSize": 78041,
         "status": 3,
         "language": "fr",
         "authors": [
             "Nico"
         ],
-        "version": 18,
+        "version": 19,
         "internalName": "FrenchStreamProvider",
         "description": "French-Stream provider for CloudStream",
         "url": "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/builds/FrenchStreamProvider.cs3",
         "name": "FrenchStreamProvider"
     },
     {
-        "fileHash": "sha256-eea063aac33df9fcc97bd6ee8291c3227715d552e5b65c791aa6ab20df092f5c",
+        "fileHash": "sha256-1a2ec7092131a53c96c20facc6af5be098f089b003cde67a6816cc1a6bd4e433",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Nikola17/cloudstream-frenchstream",
-        "fileSize": 30918,
+        "fileSize": 29841,
         "status": 3,
         "language": "fr",
         "authors": [
             "Nico"
         ],
-        "version": 1,
+        "version": 2,
         "internalName": "FSTV",
         "description": "Cha\u00eenes TV en direct de French Stream TV",
         "url": "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/builds/FSTV.cs3",
