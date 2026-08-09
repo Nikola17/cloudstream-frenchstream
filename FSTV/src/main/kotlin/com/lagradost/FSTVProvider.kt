@@ -9,6 +9,10 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeoutOrNull
+import okhttp3.Interceptor
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.jsoup.nodes.Document
 import java.net.URI
 import java.net.URLEncoder
@@ -90,15 +94,21 @@ class FSTVProvider : MainAPI() {
             "Origin" to origin
         )
 
-        val primaryQuality = withTimeoutOrNull(4_000L) {
-            runCatching {
-                FSTVParser.highestHlsQuality(
-                    app.get(config.streamUrl, headers = streamHeaders, timeout = 4L).text
-                )
-            }.getOrNull()
-        } ?: Qualities.Unknown.value
+        val (primaryQuality, alternatives) = coroutineScope {
+            val qualityRequest = async {
+                withTimeoutOrNull(4_000L) {
+                    runCatching {
+                        FSTVParser.highestHlsQuality(
+                            app.get(config.streamUrl, headers = streamHeaders, timeout = 4L).text
+                        )
+                    }.getOrNull()
+                } ?: Qualities.Unknown.value
+            }
+            val sourceRequest = async { loadAlternativeSources(config.name, origin) }
+            qualityRequest.await() to sourceRequest.await()
+        }
 
-        FSTVParser.playbackSources(config, primaryQuality).forEach { source ->
+        FSTVParser.playbackSources(config, primaryQuality, alternatives).forEach { source ->
             callback(newExtractorLink(name, source.label, source.url, ExtractorLinkType.M3U8) {
                 referer = document.baseUri()
                 headers = streamHeaders
@@ -106,6 +116,71 @@ class FSTVProvider : MainAPI() {
             })
         }
         return true
+    }
+
+    override fun getVideoInterceptor(extractorLink: ExtractorLink): Interceptor? {
+        val streamHost = host(extractorLink.url) ?: return null
+        val providerHost = host(mainUrl) ?: return null
+        if (!streamHost.equals(providerHost, ignoreCase = true)) return null
+
+        return Interceptor { chain ->
+            val request = chain.request()
+            if (request.url.host.equals(providerHost, ignoreCase = true)) {
+                executeFstvRequest(chain, request)
+            } else {
+                chain.proceed(request)
+            }
+        }
+    }
+
+    private fun executeFstvRequest(chain: Interceptor.Chain, request: Request): Response {
+        var response = chain.proceed(requestForAttempt(request))
+        var proxyAttempts = 1
+        if (isTransientGatewayError(response.code)) {
+            FSTVParser.directSegmentUrl(request.url.toString())?.let { directUrl ->
+                response.close()
+                val directResponse = runCatching {
+                    chain.proceed(request.newBuilder().url(directUrl).build())
+                }.getOrNull()
+                if (directResponse?.isSuccessful == true) return directResponse
+                directResponse?.close()
+                response = chain.proceed(requestForAttempt(request))
+                proxyAttempts++
+            }
+        }
+        while (isTransientGatewayError(response.code) && proxyAttempts < 3) {
+            response.close()
+            response = chain.proceed(requestForAttempt(request))
+            proxyAttempts++
+        }
+        return patchPlaylistResponse(response)
+    }
+
+    private fun requestForAttempt(request: Request): Request {
+        if (!FSTVParser.isProxiedMediaPlaylist(request.url.toString())) return request
+        val freshUrl = request.url.newBuilder()
+            .setQueryParameter("cs_no_cache", System.nanoTime().toString())
+            .build()
+        return request.newBuilder()
+            .url(freshUrl)
+            .header("Cache-Control", "no-cache")
+            .header("Pragma", "no-cache")
+            .build()
+    }
+
+    private fun isTransientGatewayError(code: Int): Boolean {
+        return code == 502 || code == 503 || code == 504
+    }
+
+    private fun patchPlaylistResponse(response: Response): Response {
+        val body = response.body
+        val contentType = body.contentType()
+        if (!contentType.toString().contains("mpegurl", ignoreCase = true)) return response
+        val manifest = body.string()
+        return response.newBuilder()
+            .removeHeader("Content-Length")
+            .body(FSTVParser.normalizeHlsManifest(manifest).toResponseBody(contentType))
+            .build()
     }
 
     private fun toSearchResponse(channel: FSTVChannel): SearchResponse {
@@ -128,6 +203,20 @@ class FSTVProvider : MainAPI() {
                 )
             }.getOrNull()
         }
+    }
+
+    private suspend fun loadAlternativeSources(channelName: String, origin: String): List<FSTVSource> {
+        return withTimeoutOrNull(4_000L) {
+            runCatching {
+                FSTVParser.sources(
+                    app.get(
+                        "$origin/live.php?q=1&sources=${encode(channelName)}",
+                        headers = browserHeaders,
+                        timeout = 4L
+                    ).text
+                )
+            }.getOrNull()
+        }.orEmpty()
     }
 
     private suspend fun getFstvDocument(url: String): Document {
@@ -182,6 +271,10 @@ class FSTVProvider : MainAPI() {
         return runCatching { URI(url) }.getOrNull()?.let { uri ->
             "${uri.scheme}://${uri.authority}"
         }
+    }
+
+    private fun host(url: String): String? {
+        return runCatching { URI(url).host }.getOrNull()
     }
 
     private fun programDescription(program: FSTVProgram): String {

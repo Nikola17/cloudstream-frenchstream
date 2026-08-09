@@ -21,6 +21,28 @@ class FSTVParserTest {
     }
 
     @Test
+    fun placesRankedAlternativeSourcesBeforeThePageFallback() {
+        val config = FSTVPlayerConfig(
+            name = "Bein Sport 1",
+            streamUrl = "https://fstv.rest/live.php?dl=116",
+            posterUrl = null
+        )
+        val alternatives = listOf(
+            FSTVSource("fr-fhd", 1080, "FR FHD TNT"),
+            FSTVSource("fr-hd", 720, "FR HD TNT")
+        )
+
+        assertEquals(
+            listOf(
+                FSTVPlaybackSource("FR FHD TNT", "https://fstv.rest/live.php?id=fr-fhd", 1080),
+                FSTVPlaybackSource("FR HD TNT", "https://fstv.rest/live.php?id=fr-hd", 720),
+                FSTVPlaybackSource("Direct", config.streamUrl, 576)
+            ),
+            FSTVParser.playbackSources(config, 576, alternatives)
+        )
+    }
+
+    @Test
     fun keepsSportAndCinemaCatalogsFirst() {
         assertEquals(
             listOf("sport", "cinema", "generaliste", "enfants", "documentaire", "musique", "information"),
@@ -88,7 +110,7 @@ class FSTVParserTest {
     }
 
     @Test
-    fun ranksFrenchFhdSourcesBeforeOtherAlternatives() {
+    fun keepsTheOfficialSourceOrderWhilePrioritizingFrenchAlternatives() {
         val sources = FSTVParser.sources(
             """
             [
@@ -100,9 +122,9 @@ class FSTVParserTest {
             """.trimIndent()
         )
 
-        assertEquals(listOf("fr-fhd", "fr-hd", "fr-unknown", "turkey-hd"), sources.map { it.id })
-        assertEquals(listOf(1080, 720, 0, 720), sources.map { it.quality })
-        assertEquals("FR FHD Câble", sources.first().label)
+        assertEquals(listOf("fr-hd", "fr-fhd", "fr-unknown", "turkey-hd"), sources.map { it.id })
+        assertEquals(listOf(720, 1080, 0, 720), sources.map { it.quality })
+        assertEquals("FR HD TNT", sources.first().label)
     }
 
     @Test
@@ -154,5 +176,72 @@ class FSTVParserTest {
         """.trimIndent()
 
         assertEquals(1080, FSTVParser.highestHlsQuality(manifest))
+    }
+
+    @Test
+    fun raisesShortTargetDurationForIrregularLivePlaylist() {
+        val manifest = """
+            #EXTM3U
+            #EXT-X-TARGETDURATION:4
+            #EXT-X-MEDIA-SEQUENCE:30297
+            #EXTINF:4.000,
+            segment.ts
+        """.trimIndent()
+
+        assertEquals(
+            manifest.replace("#EXT-X-TARGETDURATION:4", "#EXT-X-TARGETDURATION:8"),
+            FSTVParser.normalizeHlsManifest(manifest)
+        )
+    }
+
+    @Test
+    fun keepsFstvProxyInPlaylistAndExtractsItsDirectFallback() {
+        val manifest = """
+            #EXTM3U
+            #EXT-X-TARGETDURATION:4
+            #EXT-X-MEDIA-SEQUENCE:30297
+            #EXTINF:4.000,
+            https://fstv.rest/live.php?seg=https%3A%2F%2Fexample.r2.dev%2Fsegment.png%3FX-Amz-Algorithm%3DAWS4-HMAC-SHA256%26X-Amz-Signature%3Dabc123&r=https%3A%2F%2Fplayer.example%2F
+        """.trimIndent()
+
+        assertEquals(
+            """
+                #EXTM3U
+                #EXT-X-TARGETDURATION:8
+                #EXT-X-MEDIA-SEQUENCE:30297
+                #EXTINF:4.000,
+                https://fstv.rest/live.php?seg=https%3A%2F%2Fexample.r2.dev%2Fsegment.png%3FX-Amz-Algorithm%3DAWS4-HMAC-SHA256%26X-Amz-Signature%3Dabc123&r=https%3A%2F%2Fplayer.example%2F
+            """.trimIndent(),
+            FSTVParser.normalizeHlsManifest(manifest)
+        )
+        assertEquals(
+            "https://example.r2.dev/segment.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=abc123",
+            FSTVParser.directSegmentUrl(manifest.lineSequence().last())
+        )
+        assertNull(FSTVParser.directSegmentUrl("https://fstv.rest/live.php?dl=116"))
+        assertEquals(
+            true,
+            FSTVParser.isProxiedMediaPlaylist(
+                "https://fstv.rest/live.php?seg=https%3A%2F%2Fstream.example%2Fmono.m3u8&r=https%3A%2F%2Fplayer.example%2F"
+            )
+        )
+        assertEquals(false, FSTVParser.isProxiedMediaPlaylist(manifest.lineSequence().last()))
+    }
+
+    @Test
+    fun leavesMasterAndAlreadyRelaxedPlaylistsUntouched() {
+        val master = """
+            #EXTM3U
+            #EXT-X-STREAM-INF:BANDWIDTH=2190000,RESOLUTION=1024x576
+            media.m3u8
+        """.trimIndent()
+        val relaxed = """
+            #EXTM3U
+            #EXT-X-TARGETDURATION:15
+            #EXT-X-MEDIA-SEQUENCE:42
+        """.trimIndent()
+
+        assertEquals(master, FSTVParser.normalizeHlsManifest(master))
+        assertEquals(relaxed, FSTVParser.normalizeHlsManifest(relaxed))
     }
 }

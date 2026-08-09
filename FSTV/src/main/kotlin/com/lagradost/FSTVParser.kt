@@ -4,6 +4,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.jsoup.nodes.Document
 import java.net.URI
+import java.net.URLDecoder
+import java.net.URLEncoder
 
 internal data class FSTVCategory(val slug: String, val label: String)
 
@@ -57,6 +59,10 @@ internal object FSTVParser {
         """window\.FSTV_SRC\s*=\s*["']([^"']+)["']""",
         RegexOption.IGNORE_CASE
     )
+    private val proxiedSegmentRegex = Regex(
+        """^https?://[^/\r\n]+/live\.php\?seg=([^&\r\n]+)(?:&r=[^\r\n]*)?$""",
+        RegexOption.IGNORE_CASE
+    )
 
     fun channels(document: Document): List<FSTVChannel> {
         return document.select("div.short").mapNotNull { card ->
@@ -93,8 +99,28 @@ internal object FSTVParser {
         return FSTVPlayerConfig(name, streamUrl, poster)
     }
 
-    fun playbackSources(config: FSTVPlayerConfig, primaryQuality: Int): List<FSTVPlaybackSource> {
-        return listOf(FSTVPlaybackSource("Direct", config.streamUrl, primaryQuality))
+    fun playbackSources(
+        config: FSTVPlayerConfig,
+        primaryQuality: Int,
+        alternatives: List<FSTVSource> = emptyList()
+    ): List<FSTVPlaybackSource> {
+        val origin = runCatching { URI(config.streamUrl) }.getOrNull()?.let { uri ->
+            "${uri.scheme}://${uri.authority}"
+        }
+        return buildList {
+            if (origin != null) {
+                alternatives.take(12).forEach { source ->
+                    add(
+                        FSTVPlaybackSource(
+                            source.label.ifBlank { "Source TV" },
+                            "$origin/live.php?id=${URLEncoder.encode(source.id, "UTF-8")}",
+                            source.quality
+                        )
+                    )
+                }
+            }
+            add(FSTVPlaybackSource("Direct", config.streamUrl, primaryQuality))
+        }.distinctBy { it.url }
     }
 
     fun sources(json: String): List<FSTVSource> {
@@ -114,13 +140,12 @@ internal object FSTVParser {
                     serviceLabel(service)
                 ).joinToString(" ")
             )
-        }.distinctBy { it.id }
-            .sortedWith(
-                compareBy<FSTVSource> { source ->
-                    if (source.label.startsWith("FR ") || source.label == "FR") 0 else 1
-                }.thenByDescending { it.quality }
-                    .thenBy { it.label }
-            )
+        }.distinctBy { it.id }.let { sources ->
+            val (french, others) = sources.partition { source ->
+                source.label.startsWith("FR ") || source.label == "FR"
+            }
+            french + others
+        }
     }
 
     fun portalTvBaseUrl(document: Document): String? {
@@ -153,6 +178,44 @@ internal object FSTVParser {
             .findAll(manifest)
             .mapNotNull { it.groupValues.getOrNull(1)?.toIntOrNull() }
             .maxOrNull()
+    }
+
+    fun normalizeHlsManifest(manifest: String, minimumTargetSeconds: Int = 8): String {
+        if (!manifest.contains("#EXT-X-MEDIA-SEQUENCE:")) return manifest
+        return relaxHlsTargetDuration(manifest, minimumTargetSeconds)
+    }
+
+    fun directSegmentUrl(proxyUrl: String): String? {
+        return proxiedResourceUrl(proxyUrl)
+            ?.takeUnless(::isHlsUrl)
+    }
+
+    fun isProxiedMediaPlaylist(proxyUrl: String): Boolean {
+        return proxiedResourceUrl(proxyUrl)?.let(::isHlsUrl) == true
+    }
+
+    private fun proxiedResourceUrl(proxyUrl: String): String? {
+        val encodedUrl = proxiedSegmentRegex.matchEntire(proxyUrl)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?: return null
+        return runCatching { URLDecoder.decode(encodedUrl, "UTF-8") }
+            .getOrNull()
+            ?.takeIf(::isHttpUrl)
+    }
+
+    private fun isHlsUrl(url: String): Boolean {
+        return runCatching { URI(url).path }
+            .getOrNull()
+            ?.endsWith(".m3u8", ignoreCase = true) == true
+    }
+
+    private fun relaxHlsTargetDuration(manifest: String, minimumSeconds: Int): String {
+        val targetDuration = Regex("""#EXT-X-TARGETDURATION:(\d+)""")
+        val match = targetDuration.find(manifest) ?: return manifest
+        val currentSeconds = match.groupValues.getOrNull(1)?.toIntOrNull() ?: return manifest
+        if (currentSeconds >= minimumSeconds) return manifest
+        return targetDuration.replaceFirst(manifest, "#EXT-X-TARGETDURATION:$minimumSeconds")
     }
 
     private fun quality(label: String): Int {
