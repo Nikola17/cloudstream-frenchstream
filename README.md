@@ -43,3 +43,4 @@ https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/main/repo.js
   - Source de secours BZH-Sport (ex Volkastream / OhQuelbut) : `https://bzh.lat`, `https://volkamax.club`. Ses liens sont ajoutés après ceux de French-Stream TV pour la même chaîne.
   - Si ces domaines tombent, l'adresse à jour est récupérée sur `https://ewenethan22bzh.chatango.com/` puis `https://rentry.co/alpagang`.
   - Les sections « Événements sport » (en direct, aujourd'hui, demain) listent les matchs de BZH-Sport, les plus populaires en premier (Ligue des Champions, Ligue 1, F1, Premier League, équipe de France, gros clubs…).
+  - Chaque événement est illustré par le visuel de son sport (`assets/sports/`, générés par `tools/generate_sport_posters.py` à partir des pictogrammes [Twemoji](https://github.com/jdecked/twemoji), licence CC-BY 4.0).
