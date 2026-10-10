@@ -32,16 +32,16 @@
         "name": "FrenchStreamProvider"
     },
     {
-        "fileHash": "sha256-983fe9f729bf97ed8f99f5ee6a693c22ddf6e4098d9402b8356f10d696136d1d",
+        "fileHash": "sha256-494e9acd5cc8657d3ab30cbe0dbd13e9243d9c5fa14250590a397a2b81b2ba6e",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Nikola17/cloudstream-frenchstream",
-        "fileSize": 73202,
+        "fileSize": 80095,
         "status": 3,
         "language": "fr",
         "authors": [
             "Nico"
         ],
-        "version": 5,
+        "version": 6,
         "internalName": "FSTV",
         "description": "Cha\u00eenes TV en direct de French Stream TV, avec \u00e9v\u00e9nements sportifs et secours BZH-Sport",
         "url": "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/builds/FSTV.cs3",
