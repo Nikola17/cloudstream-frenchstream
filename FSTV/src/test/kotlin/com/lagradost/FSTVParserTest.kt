@@ -244,4 +244,18 @@ class FSTVParserTest {
         assertEquals(master, FSTVParser.normalizeHlsManifest(master))
         assertEquals(relaxed, FSTVParser.normalizeHlsManifest(relaxed))
     }
+
+    @Test
+    fun keepsChannelNameWithLinkDataAndReadsLegacyUrls() {
+        val data = FSTVParser.linkData("https://fstv.rest/index.php?newsid=4", "Bein Sport 1")
+
+        assertEquals(
+            FSTVLinkData("https://fstv.rest/index.php?newsid=4", "Bein Sport 1"),
+            FSTVParser.parseLinkData(data)
+        )
+        assertEquals(
+            FSTVLinkData("https://fstv.rest/index.php?newsid=4"),
+            FSTVParser.parseLinkData("https://fstv.rest/index.php?newsid=4")
+        )
+    }
 }

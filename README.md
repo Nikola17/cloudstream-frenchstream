@@ -39,3 +39,7 @@ https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/main/repo.js
 - Movix : `https://movix.date`, `https://movix.show`
   - Si les domaines changent, le provider tente de récupérer l'adresse officielle depuis `https://movix.online/`.
   - Les catalogues Movix utilisent TMDB, comme le site Movix, et les lecteurs proviennent de l'API Movix actuelle : FStream en priorité, puis liens personnalisés/Wiflix en fallback.
+- French-Stream TV : `https://fstv.rest` (adresse à jour récupérée sur `https://fstream.info/` si besoin)
+  - Source de secours BZH-Sport (ex Volkastream / OhQuelbut) : `https://bzh.lat`, `https://volkamax.club`. Ses liens sont ajoutés après ceux de French-Stream TV pour la même chaîne.
+  - Si ces domaines tombent, l'adresse à jour est récupérée sur `https://ewenethan22bzh.chatango.com/` puis `https://rentry.co/alpagang`.
+  - Les sections « Événements sport » (en direct, aujourd'hui, demain) listent les matchs de BZH-Sport, les plus populaires en premier (Ligue des Champions, Ligue 1, F1, Premier League, équipe de France, gros clubs…).
