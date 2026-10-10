@@ -17,6 +17,7 @@ import org.jsoup.nodes.Document
 import java.net.URI
 import java.net.URLEncoder
 import java.text.Normalizer
+import java.util.concurrent.atomic.AtomicBoolean
 
 class FSTVProvider : MainAPI() {
     override var mainUrl = "https://fstv.rest"
@@ -109,7 +110,16 @@ class FSTVProvider : MainAPI() {
     ): Boolean {
         val linkData = FSTVParser.parseLinkData(data)
         if (bzhSport.isSiteUrl(linkData.url)) {
-            return emitBzhStreams(bzhStreams { bzhSport.streams(linkData.url) }, callback)
+            val found = AtomicBoolean(false)
+            withTimeoutOrNull(BZH_EVENT_TIMEOUT_MS) {
+                runCatching {
+                    bzhSport.streams(linkData.url) { stream ->
+                        emitBzhStreams(listOf(stream), callback)
+                        found.set(true)
+                    }
+                }
+            }
+            return found.get()
         }
 
         return coroutineScope {
@@ -187,11 +197,17 @@ class FSTVProvider : MainAPI() {
     }
 
     private suspend fun loadBzhPage(url: String): LoadResponse {
-        val document = bzhSport.page(url) ?: throw ErrorLoadingException("BZH-Sport est indisponible")
-        val pageUrl = document.baseUri()
+        // Les infos de l'accueil suffisent pour la fiche : la page de l'événement, lente à
+        // charger, n'est récupérée qu'au lancement de la lecture.
         val event = runCatching { bzhSport.events() }.getOrNull().orEmpty()
-            .firstOrNull { samePath(it.url, pageUrl) || samePath(it.url, url) }
-        val title = event?.title ?: BzhSportParser.pageTitle(document) ?: BzhSportClient.SOURCE_NAME
+            .firstOrNull { samePath(it.url, url) }
+        val document = if (event == null) {
+            bzhSport.page(url) ?: throw ErrorLoadingException("BZH-Sport est indisponible")
+        } else null
+        val pageUrl = event?.url ?: document?.baseUri() ?: url
+        val title = event?.title
+            ?: document?.let(BzhSportParser::pageTitle)
+            ?: BzhSportClient.SOURCE_NAME
 
         return newLiveStreamLoadResponse(title, pageUrl, pageUrl) {
             posterUrl = event?.let { BzhSportParser.posterUrl(it.sport) }
@@ -431,5 +447,6 @@ class FSTVProvider : MainAPI() {
         private const val EVENTS_TOMORROW = "${EVENTS_PREFIX}tomorrow"
         private const val MAX_EVENTS_PER_SECTION = 60
         private const val BZH_TIMEOUT_MS = 15_000L
+        private const val BZH_EVENT_TIMEOUT_MS = 30_000L
     }
 }
