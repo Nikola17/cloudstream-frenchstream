@@ -194,11 +194,15 @@ class FSTVProvider : MainAPI() {
         val title = event?.title ?: BzhSportParser.pageTitle(document) ?: BzhSportClient.SOURCE_NAME
 
         return newLiveStreamLoadResponse(title, pageUrl, pageUrl) {
-            posterUrl = event?.iconUrl
+            posterUrl = event?.let { BzhSportParser.posterUrl(it.sport) }
             posterHeaders = browserHeaders
             plot = event?.let(::eventDescription)
                 ?: "Chaîne en direct via ${BzhSportClient.SOURCE_NAME}"
-            tags = listOfNotNull("Sport en direct", event?.competition)
+            tags = listOfNotNull(
+                "Sport en direct",
+                event?.sport?.let(BzhSportParser.sportLabels::get),
+                event?.competition
+            ).distinct()
         }
     }
 
@@ -220,7 +224,7 @@ class FSTVProvider : MainAPI() {
             else -> event.title
         }
         return newLiveSearchResponse(name, event.url) {
-            posterUrl = event.iconUrl
+            posterUrl = BzhSportParser.posterUrl(event.sport)
             posterHeaders = browserHeaders
         }
     }

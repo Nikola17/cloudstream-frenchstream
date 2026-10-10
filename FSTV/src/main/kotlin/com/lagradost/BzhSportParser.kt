@@ -14,7 +14,7 @@ internal data class BzhEvent(
     val day: BzhEventDay,
     val time: String?,
     val url: String,
-    val iconUrl: String?,
+    val sport: String,
     val isLive: Boolean,
     val position: Int
 )
@@ -24,6 +24,65 @@ internal data class BzhChannel(val name: String, val url: String)
 internal data class BzhEmbed(val label: String, val url: String)
 
 internal object BzhSportParser {
+    private const val SPORT_POSTER_BASE =
+        "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/main/assets/sports"
+    const val DEFAULT_SPORT = "sport"
+
+    val sportLabels = mapOf(
+        "foot" to "Football", "basket" to "Basket", "tennis" to "Tennis", "rugby" to "Rugby",
+        "handball" to "Handball", "cyclisme" to "Cyclisme", "f1" to "Formule 1", "moto" to "Moto",
+        "footus" to "Football US", "hockey" to "Hockey", "boxe" to "Boxe", "mma" to "MMA",
+        "combat" to "Sports de combat", "judo" to "Judo", "athletisme" to "Athlétisme",
+        "biathlon" to "Biathlon", "hiver" to "Sports d'hiver", "flechettes" to "Fléchettes",
+        "golf" to "Golf", "rallye" to "Rallye", "motocross" to "Motocross", "auto" to "Sport auto",
+        "billard" to "Billard", "volley" to "Volley", "padel" to "Padel", "squash" to "Squash",
+        "pingpong" to "Tennis de table", "baseball" to "Baseball", "natation" to "Natation",
+        "tir" to "Tir", "magazine" to "Émission", DEFAULT_SPORT to "Sport"
+    )
+
+    // Identifiants des catégories du site (icône assets/uploads/cat/<id>.png).
+    private val sportsByCategory = mapOf(
+        1 to "foot", 2 to "basket", 3 to "tennis", 4 to "rugby", 5 to "handball", 6 to "cyclisme",
+        7 to "f1", 8 to "moto", 9 to "footus", 10 to "hockey", 11 to "boxe", 12 to "mma",
+        13 to "magazine", 14 to "athletisme", 15 to "biathlon", 16 to "hiver", 17 to "flechettes",
+        18 to "golf", 19 to "rallye", 20 to "motocross", 21 to "billard", 22 to "combat",
+        24 to "volley", 25 to "padel", 27 to "squash", 32 to "judo", 34 to "pingpong",
+        37 to "auto", 39 to "baseball", 59 to "tir"
+    )
+
+    // Secours quand la catégorie est inconnue : premier mot-clé trouvé.
+    private val sportKeywords = listOf(
+        listOf("natation", "nage libre", "brasse", "papillon", "dos crawl") to "natation",
+        listOf("formule 1", "grand prix de f1") to "f1",
+        listOf("moto gp", "motogp", "moto 2", "moto 3", "superbike") to "moto",
+        listOf("nba", "euroleague", "betclic elite", "liga endesa", "basket") to "basket",
+        listOf("top 14", "pro d2", "rugby", "six nations", "champions cup") to "rugby",
+        listOf("nfl", "ncaa") to "footus",
+        listOf("nhl", "ligue magnus", "hockey") to "hockey",
+        listOf("ufc", "pfl", "ksw", "mma") to "mma",
+        listOf("boxe") to "boxe",
+        listOf("judo") to "judo",
+        listOf("taekwondo", "karate", "kick-boxing", "lutte") to "combat",
+        listOf("starligue", "ehf", "handball") to "handball",
+        listOf("atp", "wta", "masters 1000", "roland-garros", "wimbledon", "tennis") to "tennis",
+        listOf("tour de", "cyclisme", "vtt") to "cyclisme",
+        listOf("athletisme", "marathon", "100m", "200m") to "athletisme",
+        listOf("biathlon") to "biathlon",
+        listOf("ski", "snowboard") to "hiver",
+        listOf("golf") to "golf",
+        listOf("rallye", "wrc") to "rallye",
+        listOf("volley") to "volley",
+        listOf("padel") to "padel",
+        listOf("squash") to "squash",
+        listOf("tennis de table", "wtt") to "pingpong",
+        listOf("mlb", "baseball") to "baseball",
+        listOf("magazine") to "magazine",
+        listOf(
+            "ligue", "league", "liga", "serie a", "bundesliga", "eredivisie", "premiership",
+            "super lig", "mls", "coupe", "cup", "championship"
+        ) to "foot"
+    )
+    private val categoryRegex = Regex("""/cat/(\d+)\.""")
     private val embedRegex = Regex("""embeds\[(\d+)]\s*=\s*'((?:\\'|[^'])*)'""")
     private val titleRegex = Regex("""titles\[(\d+)]\s*=\s*'((?:\\'|[^'])*)'""")
     private val iframeSourceRegex = Regex(
@@ -118,7 +177,10 @@ internal object BzhSportParser {
                 day = day(dayLabel),
                 time = row.selectFirst("td.dt")?.text()?.trim()?.takeIf { it.isNotBlank() },
                 url = url,
-                iconUrl = cells.firstOrNull()?.selectFirst("img")?.absUrl("src")?.takeIf(::isImageUrl),
+                sport = sport(
+                    cells.firstOrNull()?.selectFirst("img")?.attr("src").orEmpty(),
+                    listOfNotNull(competition, title).joinToString(" ")
+                ),
                 isLive = liveStatusRegex.containsMatchIn(status),
                 position = index
             )
@@ -131,6 +193,21 @@ internal object BzhSportParser {
             val url = anchor.absUrl("href").takeIf(::isHttpUrl) ?: return@mapNotNull null
             BzhChannel(name, url)
         }.distinctBy { it.url }
+    }
+
+    fun sport(iconUrl: String, text: String): String {
+        categoryRegex.find(iconUrl)?.groupValues?.getOrNull(1)?.toIntOrNull()
+            ?.let(sportsByCategory::get)
+            ?.let { return it }
+        val normalized = normalize(text)
+        return sportKeywords.firstOrNull { (keywords, _) -> keywords.any { normalized.contains(it) } }
+            ?.second
+            ?: DEFAULT_SPORT
+    }
+
+    fun posterUrl(sport: String): String {
+        val key = sport.takeIf { it in sportLabels } ?: DEFAULT_SPORT
+        return "$SPORT_POSTER_BASE/$key.webp"
     }
 
     fun pageTitle(document: Document): String? {
@@ -277,11 +354,6 @@ internal object BzhSportParser {
         return runCatching { URI(url) }.getOrNull()
             ?.takeIf { it.scheme != null && it.authority != null }
             ?.let { "${it.scheme}://${it.authority}" }
-    }
-
-    private fun isImageUrl(value: String): Boolean {
-        return isHttpUrl(value) && Regex("""\.(png|jpe?g|gif|webp|svg)(\?.*)?$""", RegexOption.IGNORE_CASE)
-            .containsMatchIn(value)
     }
 
     private fun isHttpUrl(value: String): Boolean {

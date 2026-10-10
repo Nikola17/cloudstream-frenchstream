@@ -68,13 +68,14 @@ class BzhSportParserTest {
                 day = BzhEventDay.TODAY,
                 time = "09:35",
                 url = "https://bzh.lat/Tour-de-Lombardie-streaming-direct",
-                iconUrl = "https://bzh.lat/assets/uploads/cat/6.png",
+                sport = "cyclisme",
                 isLive = true,
                 position = 0
             ),
             events.first()
         )
-        assertNull(events[1].iconUrl)
+        assertEquals("pingpong", events[1].sport)
+        assertEquals("magazine", events[3].sport)
         assertEquals("PSG - Le Mans", events[2].title)
         assertFalse(events[2].isLive)
         assertEquals(BzhEventDay.TOMORROW, events[3].day)
@@ -193,6 +194,23 @@ class BzhSportParserTest {
         assertTrue(BzhSportParser.isSiteDocument(home))
     }
 
+    @Test
+    fun picksSportPosterFromCategoryThenKeywords() {
+        assertEquals("f1", BzhSportParser.sport("https://bzh.lat/assets/uploads/cat/7.png", "Grand Prix"))
+        assertEquals("judo", BzhSportParser.sport("https://bzh.lat/assets/uploads/cat/32.png", "Championnats du monde"))
+        assertEquals("pingpong", BzhSportParser.sport("https://bzh.lat/assets/uploads/cat/34.", "Championnats d Europe"))
+        assertEquals("basket", BzhSportParser.sport("https://bzh.lat/assets/uploads/cat/99.png", "NBA Boston - Miami"))
+        assertEquals("sport", BzhSportParser.sport("", "Evenement inconnu"))
+        assertEquals(
+            "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/main/assets/sports/f1.webp",
+            BzhSportParser.posterUrl("f1")
+        )
+        assertEquals(
+            "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/main/assets/sports/sport.webp",
+            BzhSportParser.posterUrl("inconnu")
+        )
+    }
+
     private fun event(title: String, competition: String?) = BzhEvent(
         title = title,
         competition = competition,
@@ -200,7 +218,7 @@ class BzhSportParserTest {
         day = BzhEventDay.TODAY,
         time = "20:00",
         url = "https://bzh.lat/x-streaming-direct",
-        iconUrl = null,
+        sport = "foot",
         isLive = false,
         position = 0
     )
