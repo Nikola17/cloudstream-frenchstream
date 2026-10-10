@@ -1,11 +1,12 @@
 import com.android.build.gradle.BaseExtension
 
-version = 5
+version = 6
 
 extensions.configure<BaseExtension>("android") {
     defaultConfig {
-        versionCode = 5
+        versionCode = 6
     }
+    testOptions.unitTests.isReturnDefaultValues = true
 }
 
 cloudstream {
