@@ -447,6 +447,6 @@ class FSTVProvider : MainAPI() {
         private const val EVENTS_TOMORROW = "${EVENTS_PREFIX}tomorrow"
         private const val MAX_EVENTS_PER_SECTION = 60
         private const val BZH_TIMEOUT_MS = 15_000L
-        private const val BZH_EVENT_TIMEOUT_MS = 30_000L
+        private const val BZH_EVENT_TIMEOUT_MS = 45_000L
     }
 }

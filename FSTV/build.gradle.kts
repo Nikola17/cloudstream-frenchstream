@@ -1,6 +1,6 @@
 import com.android.build.gradle.BaseExtension
 
-version = 6
+version = 7
 
 extensions.configure<BaseExtension>("android") {
     defaultConfig {

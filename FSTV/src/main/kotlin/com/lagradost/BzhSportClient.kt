@@ -2,6 +2,7 @@ package com.lagradost
 
 import com.lagradost.cloudstream3.USER_AGENT
 import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.network.WebViewResolver
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -76,6 +77,7 @@ internal class BzhSportClient {
             embeds.forEach { embed ->
                 launch {
                     val streams = runCatching { resolve(embed.url, document.baseUri(), 0) }.getOrNull().orEmpty()
+                        .ifEmpty { listOfNotNull(runCatching { browserStream(embed.url, document.baseUri()) }.getOrNull()) }
                         .map { (url, referer) -> BzhStream(embed.label, url, referer) }
                     mutex.withLock {
                         streams.filter { stream -> found.none { it.url == stream.url } }.forEach { stream ->
@@ -92,6 +94,18 @@ internal class BzhSportClient {
     suspend fun channelStreams(channelName: String): List<BzhStream> {
         val channel = BzhSportParser.findChannel(channels(), channelName) ?: return emptyList()
         return streams(channel.url).map { it.copy(label = channel.name) }
+    }
+
+    /**
+     * Players that hide their stream behind scripts (encoded addresses, nested frames): the player is
+     * opened in the app's browser, with the event page as its origin, and the HLS address it asks for
+     * is kept, with the referer it was asked with.
+     */
+    private suspend fun browserStream(url: String, referer: String): Pair<String, String>? {
+        val (request, _) = WebViewResolver(Regex("""\.m3u8"""), timeout = BROWSER_TIMEOUT_MS)
+            .resolveUsingWebView(url, referer = referer)
+        val found = request ?: return null
+        return found.url.toString() to (found.header("referer") ?: url)
     }
 
     private suspend fun resolve(url: String, referer: String, depth: Int): List<Pair<String, String>> {
@@ -206,5 +220,6 @@ internal class BzhSportClient {
         private const val MAX_EMBEDS = 6
         private const val MAX_FRAMES_PER_PAGE = 3
         private const val MAX_FRAME_DEPTH = 3
+        private const val BROWSER_TIMEOUT_MS = 20_000L
     }
 }
