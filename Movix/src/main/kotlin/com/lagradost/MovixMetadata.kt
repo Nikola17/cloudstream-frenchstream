@@ -102,12 +102,17 @@ internal object MovixMetadata {
         }
     }
 
-    private fun isCamera(quality: SearchQuality): Boolean {
+    fun isCamera(quality: SearchQuality): Boolean {
         return quality == SearchQuality.Cam ||
             quality == SearchQuality.CamRip ||
             quality == SearchQuality.HdCam ||
             quality == SearchQuality.Telesync ||
             quality == SearchQuality.Telecine
+    }
+
+    /** Rang d'un label brut ("4K", "HD", "CAM"…) : utilisé pour trier les liens, meilleure qualité d'abord. */
+    fun qualityRankOf(label: String): Int {
+        return qualityFromLabel(label)?.let(::qualityRank) ?: -1
     }
 
     private fun qualityRank(quality: SearchQuality): Int {

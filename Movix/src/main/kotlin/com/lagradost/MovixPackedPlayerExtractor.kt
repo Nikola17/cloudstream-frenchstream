@@ -96,3 +96,25 @@ internal class MovixUqloadExtractor : MovixPackedPlayerExtractor() {
     override val name = "Uqload"
     override val mainUrl = "https://uqload.is"
 }
+
+/** Lecteur « packed » (p,a,c,k,e,d) générique : couvre les hébergeurs clones fréquents de Movix/FStream. */
+internal class MovixDomainExtractor(
+    override val name: String,
+    override val mainUrl: String
+) : MovixPackedPlayerExtractor()
+
+internal object MovixDomainExtractors {
+    val domains = listOf(
+        "fsvid.lol", "kokoflix.lol", "trakx.lol", "playmogo.com", "sandratableother.com",
+        "bysebuho.com", "neocine.embedseek.com", "embedorigin.cc", "vidara.to", "luluvido.com",
+        "playmate.to", "flemmix.upns.pro", "savefiles.com", "morencius.com", "hanerix.com",
+        "anonmp4.art", "firestream.to", "uqload.vc", "vidmoly.org", "jeremyparticipantanything.com"
+    )
+
+    fun create(): List<ExtractorApi> = domains.map { domain ->
+        MovixDomainExtractor(
+            name = domain.substringBefore('.').replaceFirstChar { it.uppercase() },
+            mainUrl = "https://$domain"
+        )
+    }
+}

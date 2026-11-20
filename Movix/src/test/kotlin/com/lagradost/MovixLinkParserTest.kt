@@ -23,11 +23,40 @@ class MovixLinkParserTest {
             """.trimIndent()
         )
 
+        // VFF (doublage FR) en premier, puis VF/VFQ, puis VOSTFR ; Default en dernier.
         assertEquals(
             listOf(
+                "https://video.example/vff",
                 "https://video.example/vfq",
-                "https://video.example/shared",
-                "https://video.example/vff"
+                "https://video.example/shared"
+            ),
+            MovixLinkParser.fstreamMovie(json)
+        )
+    }
+
+    @Test
+    fun sortsEachLanguageGroupByQualityDescending() {
+        val json = JSONObject(
+            """
+            {
+              "players": {
+                "VFF": [
+                  {"url": "https://video.example/vff-hd", "quality": "HD"},
+                  {"url": "https://video.example/vff-4k", "quality": "4K"},
+                  {"url": "https://video.example/vff-unknown"}
+                ],
+                "VOSTFR": [{"url": "https://video.example/vostfr-hd", "quality": "HD"}]
+              }
+            }
+            """.trimIndent()
+        )
+
+        assertEquals(
+            listOf(
+                "https://video.example/vff-4k",
+                "https://video.example/vff-hd",
+                "https://video.example/vff-unknown",
+                "https://video.example/vostfr-hd"
             ),
             MovixLinkParser.fstreamMovie(json)
         )

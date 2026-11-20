@@ -99,7 +99,7 @@ internal object BzhSportParser {
         """^/(regarder-la-chaine-[^/]+|[^/]+-streaming-direct)/?$""",
         RegexOption.IGNORE_CASE
     )
-    private val siteNameRegex = Regex("""ohquelbut|quelbut|volka|bzh""", RegexOption.IGNORE_CASE)
+    private val siteNameRegex = Regex("""ohquelbut|quelbut|volka|bzzh|bzh""", RegexOption.IGNORE_CASE)
     private val ignoredPortalHosts = listOf(
         "chatango.com", "rentry.co", "rentry.org", "discord", "t.me", "telegram",
         "google.com", "github.io", "opengraphprotocol.org"
@@ -265,11 +265,23 @@ internal object BzhSportParser {
         }.distinct()
     }
 
+    /**
+     * Le Chatango du site publie l'adresse du jour (bannière, titre du groupe, messages épinglés :
+     * on scanne tout le HTML, pas seulement le titre, et on ne garde que les domaines du site
+     * (bzh / volka / quelbut…) pour éviter de suivre les liens Discord, rentry, etc.
+     */
     fun chatangoBaseUrls(html: String): List<String> {
         val document = Jsoup.parse(html)
-        val text = listOf(document.title(), document.select(".group_title").text()).joinToString(" ")
+        val text = buildString {
+            append(document.title()).append('\n')
+            append(document.select("meta[property^=og:], meta[name^=twitter:]").map { it.attr("content") }.joinToString("\n"))
+            append('\n')
+            append(document.select(".group_title").text()).append('\n')
+            append(document.body()?.text().orEmpty())
+        }
         return bareUrlRegex.findAll(text).mapNotNull { origin(it.value) }
             .filterNot(::isIgnoredPortal)
+            .filter { siteNameRegex.containsMatchIn(it) }
             .distinct()
             .toList()
     }
@@ -317,11 +329,13 @@ internal object BzhSportParser {
         }
     }
 
-    private fun isUsableFrame(url: String): Boolean {
+    fun usableFrame(url: String): Boolean {
         val host = runCatching { URI(url).host }.getOrNull() ?: return false
         if (!host.contains('.')) return false
         return ignoredFrameMarkers.none { url.contains(it, ignoreCase = true) }
     }
+
+    private fun isUsableFrame(url: String): Boolean = usableFrame(url)
 
     private fun isIgnoredPortal(url: String): Boolean {
         return ignoredPortalHosts.any { url.contains(it, ignoreCase = true) }

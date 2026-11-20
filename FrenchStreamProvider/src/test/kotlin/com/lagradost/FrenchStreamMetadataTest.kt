@@ -316,4 +316,32 @@ class FrenchStreamMetadataTest {
         assertEquals(ShowStatus.Ongoing, FrenchStreamMetadata.showStatus("Returning Series"))
         assertEquals(ShowStatus.Completed, FrenchStreamMetadata.showStatus("Ended"))
     }
+
+    @Test
+    fun extractsCurrentMirrorsFromOfficialPortal() {
+        val html = """
+            <html><body>
+            <h2>URL Éphémère Du moment</h2>
+            <a href="https://fs26.lol">fs26.lol</a>
+            <p>Anciens miroirs : french-stream.pink, fstream.info (portail), https://fs16.lol/</p>
+            <a href="https://discord.gg/abc">Discord</a>
+            </body></html>
+        """.trimIndent()
+
+        assertEquals(
+            listOf("https://fs26.lol", "https://french-stream.pink", "https://fs16.lol"),
+            FrenchStreamMetadata.portalBaseUrls(html)
+        )
+    }
+
+    @Test
+    fun flagsCameraQualitiesAsUnplayable() {
+        assertTrue(FrenchStreamMetadata.isCameraQuality(SearchQuality.Cam))
+        assertTrue(FrenchStreamMetadata.isCameraQuality(SearchQuality.CamRip))
+        assertTrue(FrenchStreamMetadata.isCameraQuality(SearchQuality.HdCam))
+        assertTrue(FrenchStreamMetadata.isCameraQuality(SearchQuality.Telesync))
+        assertFalse(FrenchStreamMetadata.isCameraQuality(SearchQuality.HD))
+        assertFalse(FrenchStreamMetadata.isCameraQuality(SearchQuality.WebRip))
+        assertFalse(FrenchStreamMetadata.isCameraQuality(SearchQuality.UHD))
+    }
 }

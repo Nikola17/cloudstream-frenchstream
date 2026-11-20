@@ -20,7 +20,7 @@ import java.text.Normalizer
 import java.util.concurrent.atomic.AtomicBoolean
 
 class FSTVProvider : MainAPI() {
-    override var mainUrl = "https://fstv.rest"
+    override var mainUrl = FSTV_BASE
     override var name = "French-Stream TV"
     override val hasMainPage = true
     override val hasQuickSearch = true
@@ -32,6 +32,7 @@ class FSTVProvider : MainAPI() {
     private val portalUrl = "https://fstream.info/"
     private val browserHeaders = mapOf("User-Agent" to USER_AGENT)
     private val bzhSport = BzhSportClient()
+    private val witv = WitvClient(bzhSport)
 
     override val mainPage = listOf(
         MainPageData(name = "🔴 Événements sport en direct", data = EVENTS_LIVE, horizontalImages = true),
@@ -114,7 +115,7 @@ class FSTVProvider : MainAPI() {
             withTimeoutOrNull(BZH_EVENT_TIMEOUT_MS) {
                 runCatching {
                     bzhSport.streams(linkData.url) { stream ->
-                        emitBzhStreams(listOf(stream), callback)
+                        emitStreams(BzhSportClient.SOURCE_NAME, listOf(stream), callback)
                         found.set(true)
                     }
                 }
@@ -123,16 +124,24 @@ class FSTVProvider : MainAPI() {
         }
 
         return coroutineScope {
-            // BZH-Sport sert de secours quand les flux French-Stream TV ne fonctionnent pas.
-            val knownFallback = linkData.name?.let { channelName ->
+            // BZH-Sport et WITV servent de secours quand les flux French-Stream TV ne fonctionnent pas.
+            val knownBzh = linkData.name?.let { channelName ->
                 async { bzhStreams { bzhSport.channelStreams(channelName) } }
             }
+            val knownWitv = linkData.name?.let { channelName ->
+                async { bzhStreams { witv.channelStreams(channelName) } }
+            }
             val fstvChannel = loadFstvLinks(linkData.url, callback)
-            val fallback = knownFallback?.await()
-                ?: fstvChannel?.let { channelName -> bzhStreams { bzhSport.channelStreams(channelName) } }
+            val fallbackName = linkData.name ?: fstvChannel
+            val fallback = knownBzh?.await()
+                ?: fallbackName?.let { channelName -> bzhStreams { bzhSport.channelStreams(channelName) } }
                     .orEmpty()
-            val hasFallback = emitBzhStreams(fallback, callback)
-            fstvChannel != null || hasFallback
+            val witvFallback = knownWitv?.await()
+                ?: fallbackName?.let { channelName -> bzhStreams { witv.channelStreams(channelName) } }
+                    .orEmpty()
+            val hasFallback = emitStreams(BzhSportClient.SOURCE_NAME, fallback, callback)
+            val hasWitv = emitStreams(WITV_SOURCE_NAME, witvFallback, callback)
+            fstvChannel != null || hasFallback || hasWitv
         }
     }
 
@@ -174,7 +183,7 @@ class FSTVProvider : MainAPI() {
         return withTimeoutOrNull(BZH_TIMEOUT_MS) { runCatching { block() }.getOrNull() }.orEmpty()
     }
 
-    private suspend fun emitBzhStreams(streams: List<BzhStream>, callback: (ExtractorLink) -> Unit): Boolean {
+    private suspend fun emitStreams(sourceName: String, streams: List<BzhStream>, callback: (ExtractorLink) -> Unit): Boolean {
         streams.forEach { stream ->
             val streamHeaders = browserHeaders + listOfNotNull(
                 "Referer" to stream.referer,
@@ -182,8 +191,8 @@ class FSTVProvider : MainAPI() {
             )
             callback(
                 newExtractorLink(
-                    BzhSportClient.SOURCE_NAME,
-                    "${BzhSportClient.SOURCE_NAME} · ${stream.label}",
+                    sourceName,
+                    "$sourceName · ${stream.label}",
                     stream.url,
                     ExtractorLinkType.M3U8
                 ) {
@@ -364,6 +373,15 @@ class FSTVProvider : MainAPI() {
     private suspend fun getFstvDocument(url: String): Document {
         fetchValidDocument(url)?.let { return it }
 
+        // Miroirs connus du service TV (fstv.lol, fstv.rest…) avant de consulter le portail.
+        for (base in FSTV_BASES) {
+            if (url.startsWith(base, ignoreCase = true)) continue
+            fetchValidDocument(replaceOrigin(url, base))?.let {
+                mainUrl = base
+                return it
+            }
+        }
+
         val discoveredBase = discoverCurrentBase()
             ?: throw ErrorLoadingException("French-Stream TV est indisponible")
         mainUrl = discoveredBase
@@ -394,6 +412,7 @@ class FSTVProvider : MainAPI() {
         val html = document.toString()
         return document.select("div.short").isNotEmpty() ||
             html.contains("window.FSTV_NAME", ignoreCase = true) ||
+            html.contains("fsplayer", ignoreCase = true) ||
             html.contains("French Stream TV", ignoreCase = true)
     }
 
@@ -441,6 +460,9 @@ class FSTVProvider : MainAPI() {
     private fun encode(value: String): String = URLEncoder.encode(value, "UTF-8")
 
     companion object {
+        const val FSTV_BASE = "https://fstv.lol"
+        val FSTV_BASES = listOf("https://fstv.lol", "https://fstv.rest")
+        const val WITV_SOURCE_NAME = "WITV"
         private const val EVENTS_PREFIX = "bzh-events:"
         private const val EVENTS_LIVE = "${EVENTS_PREFIX}live"
         private const val EVENTS_TODAY = "${EVENTS_PREFIX}today"

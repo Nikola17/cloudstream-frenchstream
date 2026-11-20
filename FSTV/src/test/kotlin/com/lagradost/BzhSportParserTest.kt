@@ -187,6 +187,17 @@ class BzhSportParserTest {
     }
 
     @Test
+    fun discoversCurrentBzhDomainFromAnyChatangoContent() {
+        val chatango = """
+            <html><head><title>ewenethan22bzh</title>
+            <meta property="og:description" content="⚠️Changer son DNS https://rentry.org/u2wgydta https://discord.gg/QzhfTCYuC2 📢 https://bzzh.lat/"/>
+            </head><body><div class="group_title">ewenethan22bzh</div>
+            <p>Nouveau lien du jour : https://bzzh.lat/ (discord.gg/abc et rentry.org en decoy)</p></body></html>
+        """.trimIndent()
+        assertEquals(listOf("https://bzzh.lat"), BzhSportParser.chatangoBaseUrls(chatango))
+    }
+
+    @Test
     fun recognisesSitePages() {
         assertTrue(BzhSportParser.isSitePath("https://nouveau-domaine.xyz/PSG---Le-Mans-streaming-direct"))
         assertTrue(BzhSportParser.isSitePath("https://bzh.lat/regarder-la-chaine-TF1-en-direct-streaming-gratuit"))

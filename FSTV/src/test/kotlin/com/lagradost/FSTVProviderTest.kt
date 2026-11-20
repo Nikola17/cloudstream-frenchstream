@@ -14,7 +14,7 @@ class FSTVProviderTest {
         val fstvLink = newExtractorLink(
             provider.name,
             "Direct",
-            "https://fstv.rest/live.php?dl=116",
+            "https://fstv.lol/live.php?dl=116",
             ExtractorLinkType.M3U8
         )
         val externalLink = newExtractorLink(

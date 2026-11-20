@@ -44,6 +44,29 @@ internal object FrenchStreamMetadata {
         """document\.cookie\s*=\s*["']fsschal=([^;"']+)""",
         RegexOption.IGNORE_CASE
     )
+    private val portalDomainRegex = Regex("""(?:https?://)?((?:fs\d+|french-stream|fstream)[a-z0-9.-]*\.[a-z]{2,})""", RegexOption.IGNORE_CASE)
+
+    /**
+     * Le portail fstream.info publie « l'URL éphémère du moment » (fsNN.lol, french-stream.*, …) :
+     * on en extrait les origines de miroirs de contenu (le portail lui-même est exclu).
+     */
+    fun portalBaseUrls(html: String): List<String> {
+        return portalDomainRegex.findAll(html)
+            .map { it.groupValues[1].lowercase() }
+            .distinct()
+            .filterNot { it == "fstream.info" || it.endsWith(".fstream.info") }
+            .map { "https://$it" }
+            .toList()
+    }
+
+    /** Qualités « captation en salle » : illisibles, on masque les films qui n'ont que ça. */
+    fun isCameraQuality(quality: SearchQuality): Boolean {
+        return quality == SearchQuality.Cam ||
+            quality == SearchQuality.CamRip ||
+            quality == SearchQuality.HdCam ||
+            quality == SearchQuality.Telesync ||
+            quality == SearchQuality.Telecine
+    }
 
     fun browserVerificationCookie(html: String): Pair<String, String>? {
         val value = browserVerificationCookieRegex.find(html)?.groupValues?.getOrNull(1)

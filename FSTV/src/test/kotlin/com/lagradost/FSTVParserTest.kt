@@ -149,6 +149,20 @@ class FSTVParserTest {
     }
 
     @Test
+    fun discoversFstvDomainFromPortalTvLinkAndIgnoresSocials() {
+        val document = Jsoup.parse(
+            """
+            <a href="https://discord.gg/QzhfTCYuC2">Discord</a>
+            <a href="https://ewenethan22bzh.chatango.com/">Chatango</a>
+            <a href="https://fs26.lol">Films et séries</a>
+            <a href="https://fstv.lol/">Regarder La TV</a>
+            """.trimIndent(),
+            "https://fstream.info/"
+        )
+        assertEquals("https://fstv.lol", FSTVParser.portalTvBaseUrl(document))
+    }
+
+    @Test
     fun parsesCurrentAndNextProgram() {
         val program = FSTVParser.program(
             """

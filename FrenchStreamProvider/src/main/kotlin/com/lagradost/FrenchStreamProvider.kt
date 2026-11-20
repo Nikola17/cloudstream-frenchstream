@@ -28,12 +28,16 @@ import org.jsoup.nodes.Element
 
 class FrenchStreamProvider : MainAPI() {
     @Volatile
-    override var mainUrl = "https://french-stream.one"
+    override var mainUrl = "https://fs26.lol"
     private val mirrors = listOf(
-        "https://french-stream.one",
+        "https://fs26.lol",
+        "https://fs16.lol",
         "https://french-stream.pink",
-        "https://fstream.info"
+        "https://fstream.info",
+        "https://french-stream.one"
     )
+    private val discoveredMirrors = java.util.concurrent.CopyOnWriteArrayList<String>()
+    private var portalCache: Pair<Long, List<String>>? = null
     override var name = "French-Stream"
     override val hasMainPage = true
     override val hasQuickSearch = true
@@ -53,6 +57,10 @@ class FrenchStreamProvider : MainAPI() {
         RegexOption.DOT_MATCHES_ALL
     )
     private val externalHeaders = mapOf("User-Agent" to "Mozilla/5.0")
+    private companion object {
+        const val PORTAL_URL = "https://fstream.info/"
+        const val PORTAL_CACHE_MS = 10 * 60 * 1000L
+    }
     private val siteCookies = ConcurrentHashMap<String, String>()
 
     /** Serialise les bascules de miroir : sans ça, les 8 requêtes parallèles de [loadLinks] sondent toutes les miroirs. */
@@ -86,8 +94,39 @@ class FrenchStreamProvider : MainAPI() {
                     break
                 }
             }
+            if (!response.isSuccessful) {
+                // Dernier recours : le portail fstream.info annonce le domaine du moment (fsNN.lol…).
+                for (base in portalMirrorCandidates()) {
+                    val attempt = verifiedGet(replaceOrigin(url, base))
+                    response = attempt
+                    if (attempt.isSuccessful) {
+                        mainUrl = base
+                        if (base !in mirrors && base !in discoveredMirrors) discoveredMirrors.add(base)
+                        break
+                    }
+                }
+            }
             response
         }
+    }
+
+    private fun replaceOrigin(url: String, newOrigin: String): String {
+        val uri = runCatching { URI(url) }.getOrNull() ?: return url
+        val path = uri.rawPath?.takeIf { it.isNotBlank() } ?: "/"
+        val query = uri.rawQuery?.let { "?$it" }.orEmpty()
+        return "$newOrigin$path$query"
+    }
+
+    private suspend fun portalMirrorCandidates(): List<String> {
+        portalCache?.takeIf { System.currentTimeMillis() - it.first < PORTAL_CACHE_MS }?.let { return it.second }
+        val bases = withTimeoutOrNull(8_000L) {
+            runCatching {
+                val response = app.get(PORTAL_URL, headers = externalHeaders, timeout = 8L)
+                if (response.isSuccessful) FrenchStreamMetadata.portalBaseUrls(response.text) else emptyList()
+            }.getOrNull().orEmpty()
+        } ?: emptyList()
+        portalCache = System.currentTimeMillis() to bases
+        return bases
     }
 
     /** [safeGet] puis parsing JSON tolérant : renvoie null si la réponse n'est pas du JSON exploitable. */
@@ -105,7 +144,7 @@ class FrenchStreamProvider : MainAPI() {
         }
         val suffix = uri.rawPath.orEmpty() + uri.rawQuery?.let { "?$it" }.orEmpty()
         // mainUrl juste après l'origine demandée : après une bascule, on retente d'abord le miroir connu bon.
-        return (listOf(sourceOrigin, mainUrl) + mirrors)
+        return (listOf(sourceOrigin, mainUrl) + mirrors + discoveredMirrors)
             .distinct()
             .map { origin -> "$origin$suffix" to origin }
     }
@@ -136,6 +175,9 @@ class FrenchStreamProvider : MainAPI() {
         val quality = FrenchStreamMetadata.quality(
             element.selectFirst(".film-quality, .quality, .short-quality")?.text()
         )
+
+        // Un film avec un badge CAM/TS/HDCAM n'est qu'une captation en salle : on le masque.
+        if (!isSeries && quality != null && FrenchStreamMetadata.isCameraQuality(quality)) return null
 
         return if (isSeries) {
             // Pas de badge de langue ici : load() fusionne les épisodes VF et VOSTFR d'une même série,

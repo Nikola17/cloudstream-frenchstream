@@ -114,15 +114,19 @@ internal object FSTVParser {
         }
         return buildList {
             if (origin != null) {
-                alternatives.take(12).forEach { source ->
-                    add(
-                        FSTVPlaybackSource(
-                            source.label.ifBlank { "Source TV" },
-                            "$origin/live.php?id=${URLEncoder.encode(source.id, "UTF-8")}",
-                            source.quality
+                // Sources FR d'abord, puis meilleure résolution en premier dans chaque groupe.
+                val (french, others) = alternatives.partition { it.label.startsWith("FR ") || it.label == "FR" }
+                (french.sortedByDescending { it.quality } + others.sortedByDescending { it.quality })
+                    .take(12)
+                    .forEach { source ->
+                        add(
+                            FSTVPlaybackSource(
+                                source.label.ifBlank { "Source TV" },
+                                "$origin/live.php?id=${URLEncoder.encode(source.id, "UTF-8")}",
+                                source.quality
+                            )
                         )
-                    )
-                }
+                    }
             }
             add(FSTVPlaybackSource("Direct", config.streamUrl, primaryQuality))
         }.distinctBy { it.url }
@@ -164,14 +168,24 @@ internal object FSTVParser {
         return FSTVLinkData(url, json.optString("name").trim().takeIf { it.isNotBlank() })
     }
 
+    private val ignoredPortalHosts = listOf(
+        "chatango.com", "rentry.", "discord", "t.me", "telegram", "whatsapp",
+        "twitter.com", "x.com", "facebook.com", "google.", "github", "instagram"
+    )
+    private val tvLinkHints = listOf("fstv", "bzzh", "bzh", "volka", "quelbut", "witv")
+
+    /**
+     * Le portail French-Stream (fstream.info) publie le lien « Regarder La TV » vers le domaine
+     * TV du moment (fstv.lol, …) : on prend ce lien quel que soit le domaine, hors réseaux sociaux.
+     */
     fun portalTvBaseUrl(document: Document): String? {
         return document.select("a[href]").asSequence().mapNotNull { anchor ->
             val text = anchor.text().trim()
             val href = anchor.absUrl("href").takeIf(::isHttpUrl) ?: return@mapNotNull null
-            if (!text.contains("TV", ignoreCase = true) &&
-                !text.contains("Regarder La TV", ignoreCase = true) &&
-                !href.contains("fstv", ignoreCase = true)
-            ) return@mapNotNull null
+            val isTvText = text.contains("tv", ignoreCase = true)
+            val isTvHint = tvLinkHints.any { href.contains(it, ignoreCase = true) }
+            if (!isTvText && !isTvHint) return@mapNotNull null
+            if (ignoredPortalHosts.any { href.contains(it, ignoreCase = true) }) return@mapNotNull null
             runCatching { URI(href) }.getOrNull()?.let { uri ->
                 "${uri.scheme}://${uri.authority}"
             }

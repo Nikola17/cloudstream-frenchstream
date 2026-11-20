@@ -8,6 +8,7 @@ class MovixProviderPlugin : BasePlugin() {
     override fun load() {
         registerExtractorAPI(MovixVidzyExtractor())
         registerExtractorAPI(MovixUqloadExtractor())
+        MovixDomainExtractors.create().forEach { registerExtractorAPI(it) }
         registerMainAPI(MovixProvider())
     }
 }

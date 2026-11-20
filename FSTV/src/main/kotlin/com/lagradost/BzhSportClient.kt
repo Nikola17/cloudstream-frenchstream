@@ -96,6 +96,12 @@ internal class BzhSportClient {
         return streams(channel.url).map { it.copy(label = channel.name) }
     }
 
+    /** Résolution de lecteur réutilisée par les autres sources TV (WITV…) : HLS direct ou iframes imbriquées. */
+    suspend fun resolveEmbed(url: String, referer: String): List<Pair<String, String>> = resolve(url, referer, 0)
+
+    /** Lecteur dont le flux n'est visible que dans un navigateur (WebView) : on garde la requête m3u8 observée. */
+    suspend fun browserEmbed(url: String, referer: String): Pair<String, String>? = browserStream(url, referer)
+
     /**
      * Players that hide their stream behind scripts (encoded addresses, nested frames): the player is
      * opened in the app's browser, with the event page as its origin, and the HLS address it asks for
@@ -208,7 +214,7 @@ internal class BzhSportClient {
     private fun host(url: String): String? = runCatching { URI(url).host }.getOrNull()
 
     companion object {
-        val knownBases = listOf("https://bzh.lat", "https://volkamax.club")
+        val knownBases = listOf("https://bzzh.lat", "https://bzh.lat", "https://volkamax.club")
         const val RENTRY_URL = "https://rentry.co/alpagang"
         const val CHATANGO_URL = "https://ewenethan22bzh.chatango.com/"
         const val SOURCE_NAME = "BZH-Sport"

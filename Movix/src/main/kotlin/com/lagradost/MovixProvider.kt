@@ -6,7 +6,10 @@ import com.lagradost.cloudstream3.LoadResponse.Companion.addImdbId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTMDbId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.newExtractorLink
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -17,6 +20,7 @@ import java.net.URI
 import java.net.URLEncoder
 import java.text.SimpleDateFormat
 import java.util.Locale
+import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 
 class MovixProvider : MainAPI() {
@@ -28,18 +32,27 @@ class MovixProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
     private val healthUrl = "https://movix.online"
-    private val mirrors = listOf("https://movix.date", "https://movix.show", "https://movix.cash")
-    private val movixApiUrl = "https://api.movix.show"
+    private val mirrors = listOf(
+        "https://movix.miami",
+        "https://movix.date",
+        "https://movix.show",
+        "https://movix.cash"
+    )
+    private val movixApiBases = listOf("https://api.movix.show", "https://api.movix.miami")
+    @Volatile
+    private var movixApiUrl = movixApiBases.first()
     private val tmdbApi = "https://api.themoviedb.org/3"
     private val tmdbKey = "f3d757824f08ea2cff45eb8f47ca3a1e"
     private val imageBase = "https://image.tmdb.org/t/p"
-    private val movixHeaders = mapOf(
-        "Origin" to "https://movix.show",
-        "Referer" to "https://movix.show/",
+    private val movixHeaders get() = mapOf(
+        "Origin" to mainUrl,
+        "Referer" to "$mainUrl/",
         "User-Agent" to "Mozilla/5.0"
     )
     private data class QualityCacheEntry(val quality: SearchQuality?, val expiresAt: Long)
     private val qualityCache = ConcurrentHashMap<Int, QualityCacheEntry>()
+    private data class TheatersCacheEntry(val inTheaters: Boolean, val expiresAt: Long)
+    private val theatersCache = ConcurrentHashMap<Int, TheatersCacheEntry>()
 
     override val mainPage = mainPageOf(
         "movie/popular" to "Films populaires",
@@ -226,6 +239,7 @@ class MovixProvider : MainAPI() {
             ?.toJsonObjects()
             ?.map { if (!it.has("media_type")) it.put("media_type", type) else it }
             ?.mapNotNull { toSearchResponse(it) }
+            ?.let { filterInTheaters(it) }
             ?: emptyList()
         enrichMovieQualities(items)
 
@@ -252,6 +266,7 @@ class MovixProvider : MainAPI() {
             ?.toJsonObjects()
             ?.mapNotNull { toSearchResponse(it) }
             ?.distinctBy { it.url }
+            ?.let { filterInTheaters(it) }
             ?: emptyList()
         enrichMovieQualities(results)
         return results
@@ -409,6 +424,54 @@ class MovixProvider : MainAPI() {
         return runCatching { SimpleDateFormat("yyyy-MM-dd", Locale.US).parse(value)?.time }.getOrNull()
     }
 
+    /**
+     * Retire les films encore au cinéma (sortie récente sans aucune sortie digitale/physique selon
+     * TMDB) : ils ne sont disponibles qu'en version filmée en salle (CAM/TS), illisible.
+     */
+    private suspend fun filterInTheaters(items: List<SearchResponse>): List<SearchResponse> {
+        val movies = items.filter { it.type == TvType.Movie && it.id != null }
+        if (movies.isEmpty()) return items
+        val currentYear = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).get(java.util.Calendar.YEAR)
+        val recent = movies.filter { (it as? MovieSearchResponse)?.year?.let { y -> y >= currentYear } == true }
+        if (recent.isEmpty()) return items
+        val inTheaters = Collections.synchronizedSet(HashSet<Int>())
+        withTimeoutOrNull(3_500L) {
+            for (batch in recent.chunked(8)) {
+                coroutineScope {
+                    batch.map { item ->
+                        async {
+                            if (isInTheaters(item.id!!)) inTheaters.add(item.id!!)
+                        }
+                    }.awaitAll()
+                }
+            }
+        }
+        if (inTheaters.isEmpty()) return items
+        return items.filterNot { it.id != null && it.id in inTheaters }
+    }
+
+    private suspend fun isInTheaters(id: Int): Boolean {
+        val now = System.currentTimeMillis()
+        theatersCache[id]?.takeIf { it.expiresAt > now }?.let { return it.inTheaters }
+        val result = runCatching {
+            val root = getTmdb("movie/$id/release_dates")
+            val countries = root.optJSONArray("results")?.toJsonObjects() ?: return@runCatching false
+            var hasTheatrical = false
+            var hasDigitalOrPhysical = false
+            for (country in countries) {
+                val releases = country.optJSONArray("release_dates") ?: continue
+                for (i in 0 until releases.length()) {
+                    val type = releases.optJSONObject(i)?.optInt("type") ?: continue
+                    if (type in 4..6) hasDigitalOrPhysical = true
+                    if (type in 1..3) hasTheatrical = true
+                }
+            }
+            hasTheatrical && !hasDigitalOrPhysical
+        }.getOrDefault(false)
+        theatersCache[id] = TheatersCacheEntry(result, now + 24 * 60 * 60 * 1000L)
+        return result
+    }
+
     private suspend fun enrichMovieQualities(items: List<SearchResponse>) {
         val movies = items.filter { it.type == TvType.Movie && it.id != null }
         withTimeoutOrNull(2_500L) {
@@ -469,21 +532,54 @@ class MovixProvider : MainAPI() {
     ): Boolean {
         return MovixExtractorPipeline.load(
             links = links,
-            loader = { link, emit -> loadExtractor(link, subtitleCallback, emit) },
+            loader = { link, emit ->
+                // L'API Movix renvoie parfois directement le média (mp4 CDN, m3u8) : on l'émet tel quel.
+                val direct = directMediaLink(link)
+                if (direct != null) {
+                    emit(direct)
+                    true
+                } else {
+                    loadExtractor(link, subtitleCallback, emit)
+                }
+            },
             callback = callback
         )
     }
 
+    private suspend fun directMediaLink(url: String): ExtractorLink? {
+        val path = runCatching { URI(url).path.orEmpty() }.getOrDefault(url)
+        val isM3u8 = path.endsWith(".m3u8", ignoreCase = true) || url.contains(".m3u8?", ignoreCase = true)
+        val isMp4 = path.endsWith(".mp4", ignoreCase = true) || url.contains(".mp4?", ignoreCase = true)
+        if (!isM3u8 && !isMp4) return null
+        val host = runCatching { URI(url).host.orEmpty() }.getOrDefault("Movix")
+            .substringBefore('.').replaceFirstChar { it.uppercase() }
+        val type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+        val quality = Regex("""(?<!\d)(2160|1440|1080|720|576|540|480|360|240)(?:p)?(?!\d)""", RegexOption.IGNORE_CASE)
+            .findAll(url).mapNotNull { it.groupValues.getOrNull(1)?.toIntOrNull() }.maxOrNull()
+            ?: Qualities.Unknown.value
+        return newExtractorLink("Movix", host, url, type) {
+            this.quality = quality
+        }
+    }
+
     private suspend fun getMovixApi(path: String, timeoutSeconds: Long = 15L): JSONObject? {
-        return runCatching {
-            val response = app.get(
-                "$movixApiUrl/${path.trimStart('/')}",
-                headers = movixHeaders,
-                timeout = timeoutSeconds
-            )
-            if (!response.isSuccessful) return@runCatching null
-            JSONObject(response.text)
-        }.getOrNull()
+        val bases = (listOf(movixApiUrl) + movixApiBases).distinct()
+        for (base in bases) {
+            val json = runCatching {
+                val response = app.get(
+                    "$base/${path.trimStart('/')}",
+                    headers = movixHeaders,
+                    timeout = timeoutSeconds
+                )
+                if (!response.isSuccessful) return@runCatching null
+                JSONObject(response.text)
+            }.getOrNull()
+            if (json != null) {
+                movixApiUrl = base
+                return json
+            }
+        }
+        return null
     }
 
     private suspend fun fstreamMovieLinks(id: Int): List<String> {
