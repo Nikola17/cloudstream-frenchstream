@@ -1,6 +1,6 @@
 [
     {
-        "fileHash": "sha256-712d392c20a8ceb6e883d23940709662e85d04b20bae9673bbba45c948e39d30",
+        "fileHash": "sha256-f82e91798651a0ca92ec8df6c553b304febacd96e9a5931e69d0408945da6427",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Nikola17/cloudstream-frenchstream",
         "fileSize": 52651,
@@ -9,55 +9,55 @@
         "authors": [
             "Nico"
         ],
-        "version": 2,
+        "version": 3,
         "internalName": "FrenchManga",
         "description": "Animes et films d'animation de French-Manga",
         "url": "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/builds/FrenchManga.cs3",
         "name": "FrenchManga"
     },
     {
-        "fileHash": "sha256-3fdc8268521655f59490e31f145fa976058ae7414c486eb89ed84901c05a25a9",
+        "fileHash": "sha256-27ba2700a99357392f01de0441761eb069fab760d4b88d35991feb867fb4acde",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Nikola17/cloudstream-frenchstream",
-        "fileSize": 78041,
+        "fileSize": 81422,
         "status": 3,
         "language": "fr",
         "authors": [
             "Nico"
         ],
-        "version": 19,
+        "version": 20,
         "internalName": "FrenchStreamProvider",
         "description": "French-Stream provider for CloudStream",
         "url": "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/builds/FrenchStreamProvider.cs3",
         "name": "FrenchStreamProvider"
     },
     {
-        "fileHash": "sha256-366044efe735f9be90872c780641f3c556900433082bd30641195218e85a3324",
+        "fileHash": "sha256-bc123fe7607880376a1d9372c24057f09a08fe45fefaf83a7d17506bad91992c",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Nikola17/cloudstream-frenchstream",
-        "fileSize": 81056,
+        "fileSize": 95205,
         "status": 3,
         "language": "fr",
         "authors": [
             "Nico"
         ],
-        "version": 7,
+        "version": 8,
         "internalName": "FSTV",
-        "description": "Cha\u00eenes TV en direct de French Stream TV, avec \u00e9v\u00e9nements sportifs et secours BZH-Sport",
+        "description": "Cha\u00eenes TV en direct (fstv.lol) avec \u00e9v\u00e9nements sportifs et secours BZH-Sport (bzzh.lat) et WITV",
         "url": "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/builds/FSTV.cs3",
         "name": "FSTV"
     },
     {
-        "fileHash": "sha256-f7444358a32c4dd5c85268bd86efee63854738ba7e145597ce6b959dc53c0712",
+        "fileHash": "sha256-8048553cccefbb69b398ced93ba08250f27d86660101584dd358aba6ac89b3db",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Nikola17/cloudstream-frenchstream",
-        "fileSize": 51025,
+        "fileSize": 59456,
         "status": 3,
         "language": "fr",
         "authors": [
             "Nico"
         ],
-        "version": 7,
+        "version": 8,
         "internalName": "Movix",
         "description": "Movix provider for CloudStream",
         "url": "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/builds/Movix.cs3",
