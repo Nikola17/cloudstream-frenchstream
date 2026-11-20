@@ -19,6 +19,12 @@ class WitvParserTest {
         <a href="/chaines-live/sport/">Sport</a>
         <a href="/chaines-live/cinema/">Cinéma</a>
         <a href="/chaines-live">Toutes les chaînes</a>
+        <div class="card">
+          <a href="/chaines-live/6ter"><img src="data:image/gif;base64,xxx" data-src="/images/logo/6ter-logo.png"/>Live</a>
+        </div>
+        <div class="card" style="background-image:url('/images/logo/arte-logo.png')">
+          <a href="/chaines-live/arte">Regarder</a>
+        </div>
         """.trimIndent(),
         "https://witv.online/chaines-live"
     )
@@ -37,13 +43,29 @@ class WitvParserTest {
     @Test
     fun parsesChannelLinksAndSkipsCategories() {
         val channels = WitvParser.channels(listPage)
-        val slugs = channels.map { WitvParser.slugOf(it.url) }
-        assertEquals(listOf("tf1", "canal-plus"), slugs)
-        assertEquals("TF1", channels.first().name)
-        assertEquals("https://witv.online/images/logo/tf1.png", channels.first().posterUrl)
+        val bySlug = channels.associateBy { WitvParser.slugOf(it.url) }
+        assertEquals(setOf("tf1", "canal-plus", "6ter", "arte"), bySlug.keys)
+        assertEquals("TF1", bySlug["tf1"]?.name)
+        assertEquals("https://witv.online/images/logo/tf1.png", bySlug["tf1"]?.posterUrl)
         // Le 2e lien n'a qu'un texte générique : le nom vient du logo de sa carte.
-        assertEquals("Canal+", channels[1].name)
-        assertEquals("https://witv.online/images/logo/canal.png", channels[1].posterUrl)
+        assertEquals("Canal+", bySlug["canal-plus"]?.name)
+        assertEquals("https://witv.online/images/logo/canal.png", bySlug["canal-plus"]?.posterUrl)
+        // data-src prioritaire sur un src placeholder ; background-image CSS en secours.
+        assertEquals("https://witv.online/images/logo/6ter-logo.png", bySlug["6ter"]?.posterUrl)
+        assertEquals("https://witv.online/images/logo/arte-logo.png", bySlug["arte"]?.posterUrl)
+        assertEquals("arte", bySlug["arte"]?.name)
+    }
+
+    @Test
+    fun prefersLogoImagesOnChannelPages() {
+        val page = Jsoup.parse(
+            """
+            <img src="/images/nav.png"/>
+            <img src="/images/logo/m6-logo.png"/>
+            """.trimIndent(),
+            "https://witv.online/chaines-live/m6"
+        )
+        assertEquals("https://witv.online/images/logo/m6-logo.png", WitvParser.pagePoster(page))
     }
 
     @Test

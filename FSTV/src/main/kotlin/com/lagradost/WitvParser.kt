@@ -1,8 +1,8 @@
 package com.lagradost
 
 import org.jsoup.nodes.Document
+import org.jsoup.nodes.Element
 import java.net.URI
-import java.text.Normalizer
 
 internal data class WitvCategory(val slug: String, val label: String)
 
@@ -43,6 +43,11 @@ internal object WitvParser {
         RegexOption.IGNORE_CASE
     )
 
+    private val backgroundUrlRegex = Regex(
+        """url\(\s*['"]?([^'")]+)""",
+        RegexOption.IGNORE_CASE
+    )
+
     fun isSiteDocument(document: Document): Boolean {
         val html = document.toString()
         return html.contains("/chaines-live", ignoreCase = true) ||
@@ -69,12 +74,9 @@ internal object WitvParser {
             val isGenericCta = ownText.isNotBlank() &&
                 ownText.lowercase().split(Regex("""\s+""")).all { it in genericWords }
             val name = ownText.takeIf { it.isNotBlank() && !isGenericCta }
-                ?: anchor.selectFirst("img")?.attr("alt")?.trim()?.takeIf { it.isNotBlank() }
-                ?: anchor.parent()?.selectFirst("img")?.attr("alt")?.trim()?.takeIf { it.isNotBlank() }
-                ?: anchor.parent()?.ownText()?.trim()?.takeIf { it.isNotBlank() }
+                ?: cardImage(anchor)?.attr("alt")?.trim()?.takeIf { it.isNotBlank() }
                 ?: slug.replace('-', ' ')
-            val poster = (anchor.selectFirst("img") ?: anchor.parent()?.selectFirst("img"))
-                ?.absUrl("src")?.takeIf(::isHttpUrl)
+            val poster = findCardPoster(anchor)
             WitvChannel(name, href, poster)
         }
     }
@@ -93,6 +95,73 @@ internal object WitvParser {
             .substringBefore(" – Live Tv Streaming")
             .trim()
         return title.takeIf { it.isNotBlank() && !it.equals("chaines", ignoreCase = true) }
+    }
+
+    /**
+     * Logo d'une carte chaîne : on cherche l'image du lien puis des ancêtres proches,
+     * mais uniquement quand le bloc ne contient qu'une seule image (sinon on attraperait
+     * le logo d'une autre carte), et sinon un background-image CSS sur le bloc.
+     */
+    private fun findCardPoster(anchor: Element): String? {
+        var node: Element? = anchor
+        repeat(4) {
+            val current = node ?: return@repeat
+            cardImage(current)?.let { img -> imageUrlFrom(img)?.let { return it } }
+            current.attr("style").takeIf { it.isNotBlank() }?.let { style ->
+                backgroundUrlRegex.find(style)?.groupValues?.getOrNull(1)
+                    ?.trim()?.takeIf { it.isNotBlank() && isRealImage(it) }
+                    ?.let { raw -> runCatching { URI(current.baseUri()).resolve(raw).toString() }.getOrNull() }
+                    ?.takeIf(::isHttpUrl)?.let { return it }
+            }
+            node = current.parent()
+        }
+        return null
+    }
+
+    /** Image d'un bloc de carte : l'unique img du bloc, en remontant au plus 3 niveaux. */
+    private fun cardImage(element: Element): Element? {
+        var node: Element? = element
+        repeat(4) {
+            val current = node ?: return null
+            val images = current.select("img")
+            if (images.size == 1) return images.first()
+            node = current.parent()
+        }
+        return null
+    }
+
+    private fun imageUrlFrom(img: Element): String? {
+        val candidates = listOf(
+            img.attr("data-src"),
+            img.attr("data-lazy-src"),
+            img.attr("data-original"),
+            img.attr("srcset").split(',').firstOrNull()?.trim()?.substringBefore(' ').orEmpty(),
+            img.attr("src")
+        )
+        for (raw in candidates) {
+            val value = raw.trim().takeIf { it.isNotBlank() } ?: continue
+            if (!isRealImage(value)) continue
+            val absolute = if (value.startsWith("//")) "https:$value" else value
+            return runCatching { URI(img.baseUri()).resolve(absolute).toString() }
+                .getOrNull()?.takeIf(::isHttpUrl)
+        }
+        return null
+    }
+
+    private fun isRealImage(url: String): Boolean {
+        val u = url.lowercase()
+        return !u.startsWith("data:") && !u.contains("placeholder") &&
+            !u.contains("no-image") && !u.contains("noimage") && !u.endsWith(".svg")
+    }
+
+    /** Logo d'une page chaîne : on privilégie une image /logo, sinon la première image utile. */
+    fun pagePoster(document: Document): String? {
+        val images = document.select("img")
+        return images
+            .firstOrNull { isRealImage(it.attr("src")) && it.absUrl("src").contains("/logo", ignoreCase = true) }
+            ?.let { imageUrlFrom(it) }
+            ?: images.firstOrNull { isRealImage(it.attr("src")) || isRealImage(it.attr("data-src")) }
+                ?.let { imageUrlFrom(it) }
     }
 
     /** Liens de lecteurs d'une page chaîne : hrefs /player/sourceN/?id=… et iframes directes. */

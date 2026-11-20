@@ -68,6 +68,12 @@ internal class WitvClient(private val player: BzhSportClient) {
         return WitvParser.pageTitle(document)
     }
 
+    /** Titre + logo d'une page chaîne, en un seul chargement. */
+    suspend fun pageInfo(url: String): Pair<String?, String?>? {
+        val document = fetchDocument(url) ?: return null
+        return WitvParser.pageTitle(document) to WitvParser.pagePoster(document)
+    }
+
     /** Résout les serveurs embarqués dans la page d'une chaîne, jusqu'au flux HLS. */
     suspend fun streamsForPage(pageUrl: String, label: String): List<BzhStream> {
         val document = fetchDocument(pageUrl) ?: return emptyList()

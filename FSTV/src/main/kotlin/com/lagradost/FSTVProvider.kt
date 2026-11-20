@@ -30,14 +30,20 @@ class FSTVProvider : MainAPI() {
     private val bzhSport = BzhSportClient()
     private val witv = WitvClient(bzhSport)
 
+    // Sections numérotées : l'ordre affiché reste 1) matchs BZH-Sport, 2) chaînes WITV,
+    // même si l'app trie les lignes par nom.
     override val mainPage = listOf(
-        MainPageData(name = "🔴 Matchs en direct", data = EVENTS_LIVE, horizontalImages = true),
-        MainPageData(name = "Matchs aujourd'hui", data = EVENTS_TODAY, horizontalImages = true),
-        MainPageData(name = "Matchs demain", data = EVENTS_TOMORROW, horizontalImages = true),
-        MainPageData(name = "📅 Matchs à venir", data = EVENTS_UPCOMING, horizontalImages = true),
-        MainPageData(name = "Toutes les chaînes", data = WITV_ALL, horizontalImages = true)
-    ) + WitvParser.channelCategories.map {
-        MainPageData(name = it.label, data = "${WITV_PREFIX}${it.slug}", horizontalImages = true)
+        MainPageData(name = "01. 🔴 Matchs en direct", data = EVENTS_LIVE, horizontalImages = true),
+        MainPageData(name = "02. Matchs aujourd'hui", data = EVENTS_TODAY, horizontalImages = true),
+        MainPageData(name = "03. Matchs demain", data = EVENTS_TOMORROW, horizontalImages = true),
+        MainPageData(name = "04. 📅 Matchs à venir", data = EVENTS_UPCOMING, horizontalImages = true),
+        MainPageData(name = "05. 📺 Toutes les chaînes", data = WITV_ALL, horizontalImages = true)
+    ) + WitvParser.channelCategories.mapIndexed { index, category ->
+        MainPageData(
+            name = "%02d. %s".format(index + 6, category.label),
+            data = "${WITV_PREFIX}${category.slug}",
+            horizontalImages = true
+        )
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -156,12 +162,15 @@ class FSTVProvider : MainAPI() {
 
     private suspend fun loadWitvPage(url: String): LoadResponse {
         val channel = runCatching { witv.findChannel(url) }.getOrNull()
-        val name = channel?.name
-            ?: runCatching { witv.pageTitle(url) }.getOrNull()
-            ?: "Chaîne TV"
+        // Si la liste n'avait pas le logo, on le cherche sur la page de la chaîne.
+        val info = if (channel == null || channel.posterUrl == null) {
+            runCatching { witv.pageInfo(url) }.getOrNull()
+        } else null
+        val name = channel?.name ?: info?.first ?: "Chaîne TV"
+        val poster = channel?.posterUrl ?: info?.second
 
         return newLiveStreamLoadResponse(name, url, FSTVParser.linkData(url, name)) {
-            posterUrl = channel?.posterUrl
+            posterUrl = poster
             posterHeaders = browserHeaders
             plot = "Chaîne en direct via WITV"
             tags = listOf("TV en direct")
