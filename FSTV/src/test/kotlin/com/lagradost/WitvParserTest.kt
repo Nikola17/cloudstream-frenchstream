@@ -64,7 +64,7 @@ class WitvParserTest {
     }
 
     @Test
-    fun parsesChannelLinksEncodesAccentsAndAppliesFallbackLogos() {
+    fun parsesChannelLinksEncodesAccentsAndAppliesStudioAndFallbackLogos() {
         val channels = WitvParser.channels(listPage)
         val bySlug = channels.associateBy { WitvParser.slugOf(it.url) }
         assertEquals(
@@ -72,22 +72,31 @@ class WitvParserTest {
             bySlug.keys
         )
         assertEquals("TF1", bySlug["tf1"]?.name)
-        assertEquals("https://witv.channel/images/logo/tf1.png", bySlug["tf1"]?.posterUrl)
+        assertEquals(
+            "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/main/assets/channels/tf1.webp",
+            bySlug["tf1"]?.posterUrl
+        )
         assertEquals("Canal+", bySlug["canal-plus"]?.name)
         assertEquals("https://witv.channel/images/logo/canal.png", bySlug["canal-plus"]?.posterUrl)
-        assertEquals("https://witv.channel/images/logo/6ter-logo.png", bySlug["6ter"]?.posterUrl)
-        assertEquals("https://witv.channel/images/logo/arte-logo.png", bySlug["arte"]?.posterUrl)
-        // Accents encodés en ASCII pour Android/Coil
+        assertEquals(
+            "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/main/assets/channels/6ter.webp",
+            bySlug["6ter"]?.posterUrl
+        )
+        assertEquals(
+            "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/main/assets/channels/arte-france.webp",
+            bySlug["arte"]?.posterUrl
+        )
+        // Chaîne inconnue avec accents encodés en ASCII pour Android/Coil
         assertEquals("Comédie+ HD", bySlug["comedie"]?.name)
         assertEquals("https://witv.channel/images/logo/Com%C3%A9die+logo.png", bySlug["comedie"]?.posterUrl)
-        // Logo cassé media.info remplacé par un logo vérifié
+        // Chaîne connue avec logo source media.info remplacée par le poster studio HD 960x540
         assertEquals(
-            "https://raw.githubusercontent.com/tv-logo/tv-logos/main/countries/united-kingdom/tnt-sports-2-uk.png",
+            "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/main/assets/channels/tnt-sports-2-uk.webp",
             bySlug["tnt-sports-2-uk"]?.posterUrl
         )
-        // Placeholder SVG remplacé par un logo de secours vérifié
+        // Placeholder SVG remplacé par le poster studio HD 960x540
         assertEquals(
-            "https://raw.githubusercontent.com/tv-logo/tv-logos/main/countries/france/ab1-fr.png",
+            "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/main/assets/channels/ab1.webp",
             bySlug["ab1"]?.posterUrl
         )
         // Pagination DLE détectée
@@ -165,11 +174,15 @@ class WitvParserTest {
         val page = Jsoup.parse(
             """
             <img src="/images/nav.png"/>
-            <img src="/images/logo/m6-logo.png"/>
+            <img src="/images/logo/custom-logo.png"/>
             """.trimIndent(),
-            "https://witv.channel/chaines-live/m6"
+            "https://witv.channel/chaines-live/chaine-inconnue"
         )
-        assertEquals("https://witv.channel/images/logo/m6-logo.png", WitvParser.pagePoster(page))
+        assertEquals("https://witv.channel/images/logo/custom-logo.png", WitvParser.pagePoster(page))
+        assertEquals(
+            "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/main/assets/channels/m6.webp",
+            WitvParser.pagePoster(Jsoup.parse("<img src='/images/logo/m6.png'/>", "https://witv.channel/chaines-live/m6"))
+        )
         assertNotNull(WitvParser.fallbackLogo("RTS1"))
     }
 

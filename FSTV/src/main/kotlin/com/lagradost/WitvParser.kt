@@ -65,6 +65,68 @@ internal object WitvParser {
     )
     private val playerPathRegex = Regex("""/player/[a-z0-9_-]+/\?[^"'\s<>]*""", RegexOption.IGNORE_CASE)
 
+    private const val CHANNEL_POSTER_BASE =
+        "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/main/assets/channels"
+
+    // Posters studio HD 960x540 (zone de sécurité centrée pour les cartes 16:9 et la bannière Hero).
+    private val studioPosterSlugs = setOf(
+        "13eme-rue-hd", "6ter", "ab1", "action-hd", "after-foot-tv", "animaux", "arte-france",
+        "automoto-la-chaine-fhd", "barca-tv-spain", "bbc-america-bbca", "bein-sport-1-fr",
+        "bein-sport-2-fr", "bein-sport-3-fr", "bein-sports-1-arabic", "bein-sports-max-10-france",
+        "bein-sports-max-4-france", "bein-sports-max-5-france", "bein-sports-max-6-france",
+        "bein-sports-max-7-france", "bein-sports-max-8-france", "bein-sports-max-9-france",
+        "bfm-business", "bfm-tv-france", "boing", "boing-69130693e2582f2056fe", "boomerang-tv",
+        "c-news", "caillou", "canal", "canal-cinema", "canal-comedie", "canal-docs", "canal-foot",
+        "canal-formula-1", "canal-gr-ecran", "canal-kids-hd", "canal-motogp", "canal-plus-box-office",
+        "canal-plus-live-1", "canal-series", "canal-sport", "canal-sport-1", "canal-sport-2",
+        "canal-sport-3", "canal-sport-360", "canal-sport-4", "canal-sport-5", "canal-sport-poland",
+        "canal-sport1", "cartoon-network-tv", "chasse-peche", "cherie-25", "cine-classic",
+        "cine-club-fhd", "cine-emotion", "cine-family", "cine-frisson", "cine-polar", "cine-premier",
+        "cine-western", "comedie-plus-hd", "crime-district", "cstar", "dazn-1-france", "dazn-1-uk",
+        "dazn-1-uk-230", "dazn-france", "dazn-ligue-1-live-1-fhd", "dazn-pro-league-1-belgique",
+        "discovery-channel", "discovery-family", "discovery-investigation-hd", "discovery-science",
+        "discovery-science-tlc", "discovery-world", "disney-channel", "disney-junior", "equidia-hd",
+        "euronews", "eurosport-1", "eurosport-2", "france-2", "france-24", "france-3", "france-4",
+        "france-5", "france-info", "game-one", "golf-489894011d70f961121b5", "gulli",
+        "histoire-tv-hd", "lci-france", "lcp-assemblee-nationale", "le-figaro", "lequipe-2-live-tv",
+        "lequipe-3-live-tv", "lequipe-la-chaine", "ligue-1", "ligue-2", "m6", "m6-music-sd",
+        "mangas-fr", "mcm", "motor-racing", "movistar-laliga", "mtv", "mtv-hits", "nat-geo-fr",
+        "nat-geo-wild-fr", "nat-geo-wild-usa", "naturetime-france", "nbc-sports-bay-area",
+        "nbc-sports-boston", "nbc-sports-california", "nbc-sports-philadelphia", "nickelodeon",
+        "nicktoons", "novelas-tv", "nrj-hits", "ocs-city", "okoo", "okoo-tv", "paramount-channel-hd",
+        "paris-premiere", "piwi", "planete-aventure", "planete-crime", "planete-plus-hd",
+        "pluto-tv-super-kids", "public-senat", "rds-sport-canada", "real-madrid-tv-spain",
+        "rmc-decouverte", "rmc-fr", "rmc-life", "rmc-sport-2-fr", "rmc-sport-3-fr", "rmc-story",
+        "rt-france", "rtbf-la-une", "rtbf-tipik-belgique", "rtl-tvi-belgique", "rtl9", "rts-1",
+        "rts-2-suisse", "science-vie-tv", "serie-club", "sky-cinema-action-uk",
+        "sky-cinema-animation-uk", "sky-cinema-animation-uk-675", "sky-cinema-premiere-uk",
+        "sky-cinema-select-uk", "sky-cinema-thriller-uk", "sky-sports-premier-league",
+        "sport-en-france", "starz-cinema", "starz-kids-family", "syfy-hd", "syfy-usa", "tcm-cinema",
+        "teletoon", "teva", "tf1", "tf1-series-films-hd", "tfx", "tiji-12869143765e4bc62e1bc",
+        "tmc", "tnt-sports-1-uk", "tnt-sports-2-uk", "tnt-sports-3-uk", "toonami", "toute-lhistoire",
+        "trek", "tv-monaco", "tv5-monde-hd", "tva-sports-canada", "ushuaia-tv", "voyage", "voyages",
+        "voyages-saveurs", "w9", "warner-tv"
+    )
+
+    private val studioPosterAliases = mapOf(
+        "arte" to "arte-france",
+        "rts1" to "rts-1",
+        "rts2" to "rts-2-suisse",
+        "rts-2" to "rts-2-suisse",
+        "automoto" to "automoto-la-chaine-fhd",
+        "rtbf-tipik" to "rtbf-tipik-belgique"
+    )
+
+    fun studioPosterUrl(slug: String): String? {
+        val key = slug.lowercase().trim()
+        val resolved = when {
+            key in studioPosterSlugs -> key
+            key in studioPosterAliases -> studioPosterAliases[key]
+            else -> null
+        } ?: return null
+        return "$CHANNEL_POSTER_BASE/$resolved.webp"
+    }
+
     // Hébergeurs de logos morts/bloqués à remplacer par un logo de secours fiable.
     private val brokenLogoHosts = listOf("media.info")
 
@@ -152,7 +214,7 @@ internal object WitvParser {
                 ?: cardLabel
                 ?: cardImage(anchor)?.attr("alt")?.trim()?.takeIf { it.isNotBlank() }
                 ?: slug.replace('-', ' ')
-            val poster = findCardPoster(anchor) ?: fallbackLogo(name, slug)
+            val poster = studioPosterUrl(slug) ?: findCardPoster(anchor) ?: fallbackLogo(name, slug)
             WitvChannel(name, href, poster)
         }
     }
@@ -241,8 +303,9 @@ internal object WitvParser {
         return brokenLogoHosts.none { u.contains(it) }
     }
 
-    /** Logo d'une page chaîne : on privilégie une image /logo, sinon la première image utile. */
+    /** Logo d'une page chaîne : poster studio HD 960x540 en priorité, sinon image /logo. */
     fun pagePoster(document: Document): String? {
+        studioPosterUrl(slugOf(document.baseUri()))?.let { return it }
         val images = document.select("img")
         val found = images
             .firstOrNull { isRealImage(it.attr("src")) && it.absUrl("src").contains("/logo", ignoreCase = true) }
