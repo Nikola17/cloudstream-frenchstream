@@ -4,7 +4,9 @@ import org.jsoup.nodes.Document
 import java.net.URI
 import java.text.Normalizer
 
-internal data class WitvChannel(val name: String, val url: String)
+internal data class WitvCategory(val slug: String, val label: String)
+
+internal data class WitvChannel(val name: String, val url: String, val posterUrl: String? = null)
 
 /**
  * WITV (witv.online / witv.channel / witv.team / witv.football / witv.space) : annuaire de
@@ -20,10 +22,20 @@ internal object WitvParser {
         "https://witv.space"
     )
 
-    private val categorySlugs = setOf(
-        "sport", "cinema", "cinema-fr", "documentaire", "documentaires", "generaliste",
-        "enfants", "info", "musique", "belgique", "suisse", "toutes-les-chaines", "chaines"
+    val channelCategories = listOf(
+        WitvCategory("sport", "Chaînes Sport"),
+        WitvCategory("cinema", "Chaînes Cinéma"),
+        WitvCategory("documentaire", "Chaînes Documentaires"),
+        WitvCategory("generaliste", "Chaînes Généralistes"),
+        WitvCategory("enfants", "Chaînes Jeunesse"),
+        WitvCategory("info", "Chaînes Info"),
+        WitvCategory("musique", "Chaînes Musique"),
+        WitvCategory("belgique", "Chaînes Belgique"),
+        WitvCategory("suisse", "Chaînes Suisse")
     )
+
+    private val categorySlugs = channelCategories.map { it.slug }.toSet() +
+        setOf("chaines", "live", "toutes-les-chaines", "chaines-live")
 
     // /chaines-live/tf1  ou  /chaines-live/27-tf1.html
     private val channelPathRegex = Regex(
@@ -36,6 +48,10 @@ internal object WitvParser {
         return html.contains("/chaines-live", ignoreCase = true) ||
             document.title().contains("witv", ignoreCase = true)
     }
+
+    fun categoryUrl(base: String, slug: String): String = "$base/chaines-live/$slug/"
+
+    fun channelsUrl(base: String): String = "$base/chaines-live"
 
     fun channels(document: Document): List<WitvChannel> {
         val seen = mutableSetOf<String>()
@@ -57,8 +73,26 @@ internal object WitvParser {
                 ?: anchor.parent()?.selectFirst("img")?.attr("alt")?.trim()?.takeIf { it.isNotBlank() }
                 ?: anchor.parent()?.ownText()?.trim()?.takeIf { it.isNotBlank() }
                 ?: slug.replace('-', ' ')
-            WitvChannel(name, href)
+            val poster = (anchor.selectFirst("img") ?: anchor.parent()?.selectFirst("img"))
+                ?.absUrl("src")?.takeIf(::isHttpUrl)
+            WitvChannel(name, href, poster)
         }
+    }
+
+    /** Titre d'une page chaîne : « TF1 - Live Tv Streaming » → « TF1 ». */
+    fun pageTitle(document: Document): String? {
+        val raw = document.selectFirst("h1")?.text()
+            ?: document.selectFirst("h2")?.text()
+            ?: document.title()
+        return cleanTitle(raw)
+    }
+
+    private fun cleanTitle(value: String): String? {
+        val title = value.trim()
+            .substringBefore(" - Live Tv Streaming")
+            .substringBefore(" – Live Tv Streaming")
+            .trim()
+        return title.takeIf { it.isNotBlank() && !it.equals("chaines", ignoreCase = true) }
     }
 
     /** Liens de lecteurs d'une page chaîne : hrefs /player/sourceN/?id=… et iframes directes. */
@@ -86,16 +120,16 @@ internal object WitvParser {
             ?: channels.firstOrNull { BzhSportParser.channelKey(slugOf(it.url)) == key }
     }
 
+    fun findChannelByUrl(channels: List<WitvChannel>, url: String): WitvChannel? {
+        val path = runCatching { URI(url).rawPath?.trimEnd('/') }.getOrNull() ?: return null
+        return channels.firstOrNull { channel ->
+            runCatching { URI(channel.url).rawPath?.trimEnd('/') }.getOrNull() == path
+        }
+    }
+
     fun slugOf(url: String): String {
         val path = runCatching { URI(url).rawPath }.getOrNull()?.trimEnd('/') ?: return url
         return channelPathRegex.matchEntire(path)?.groupValues?.get(2) ?: path.substringAfterLast('/')
-    }
-
-    fun normalizeSlug(value: String): String {
-        return Normalizer.normalize(value.lowercase(), Normalizer.Form.NFD)
-            .replace(Regex("""\p{M}+"""), "")
-            .replace(Regex("""[^a-z0-9]+"""), "-")
-            .trim('-')
     }
 
     private fun resolveUrl(baseUrl: String, value: String): String? {

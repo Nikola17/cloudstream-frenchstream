@@ -42,10 +42,9 @@ https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/main/repo.js
   - Si les domaines changent, le provider tente de récupérer l'adresse officielle depuis `https://movix.online/`.
   - Les catalogues Movix utilisent TMDB, comme le site Movix, et les lecteurs proviennent de l'API Movix (`api.movix.show`, `api.movix.miami`) : FStream en priorité (VFF/VF d'abord, meilleure qualité d'abord), puis liens personnalisés, puis Wiflix en fallback. Les liens média directs (mp4/m3u8) et les hébergeurs packés (fsvid, kokoflix, trakx, playmogo, vidara, voe…) sont résolus directement.
   - Les films encore au cinéma (sortie récente sans sortie digitale/physique selon TMDB) sont retirés du catalogue.
-- French-Stream TV : `https://fstv.lol`, `https://fstv.rest` (adresse à jour récupérée sur `https://fstream.info/` via le lien « Regarder La TV » si besoin)
-  - Sources de secours BZH-Sport (ex Volkastream / OhQuelbut) : `https://bzzh.lat`, `https://bzh.lat`, `https://volkamax.club`, et WITV : `https://witv.online`, `https://witv.channel`, `https://witv.team`, `https://witv.football`, `https://witv.space`. Leurs liens sont ajoutés après ceux de French-Stream TV pour la même chaîne (sources FR d'abord, puis meilleure qualité).
-  - Si ces domaines tombent, l'adresse à jour est récupérée sur `https://ewenethan22bzh.chatango.com/` puis `https://rentry.co/alpagang`.
-  - Les sections « Événements sport » (en direct, aujourd'hui, demain) listent les matchs de BZH-Sport, les plus populaires en premier (Ligue des Champions, Ligue 1, F1, Premier League, équipe de France, gros clubs…).
+- French-Stream TV : événements/matchs via **BZH-Sport** (`https://bzzh.lat`, `https://bzh.lat`, `https://volkamax.club`), chaînes TV via **WITV** (`https://witv.online`, `https://witv.channel`, `https://witv.team`, `https://witv.football`, `https://witv.space`). Les domaines fstv.lol / fstv.rest ne sont plus utilisés.
+  - Accueil : Matchs en direct, Matchs aujourd'hui, Matchs demain, **Matchs à venir** (BZH-Sport), puis Toutes les chaînes et les catégories WITV (Sport, Cinéma, Documentaires, Généralistes, Jeunesse, Info, Musique, Belgique, Suisse).
+  - Si le domaine BZH-Sport tombe, l'adresse à jour est récupérée sur `https://ewenethan22bzh.chatango.com/` puis `https://rentry.co/alpagang`.
   - Chaque événement est illustré par le visuel de son sport (`assets/sports/`, générés par `tools/generate_sport_posters.py` à partir des pictogrammes [Twemoji](https://github.com/jdecked/twemoji), licence CC-BY 4.0).
 - French-Manga : `https://w16.french-manga.net`, `https://french-manga.net`
 

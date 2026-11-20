@@ -1,10 +1,10 @@
 import com.android.build.gradle.BaseExtension
 
-version = 8
+version = 9
 
 extensions.configure<BaseExtension>("android") {
     defaultConfig {
-        versionCode = 8
+        versionCode = 9
     }
     testOptions.unitTests.isReturnDefaultValues = true
 }
@@ -12,7 +12,7 @@ extensions.configure<BaseExtension>("android") {
 cloudstream {
     language = "fr"
     authors = listOf("Nico")
-    description = "Chaînes TV en direct (fstv.lol) avec événements sportifs et secours BZH-Sport (bzzh.lat) et WITV"
+    description = "Chaînes TV en direct via WITV, matchs et événements sport via BZH-Sport (bzzh.lat)"
 }
 
 dependencies {

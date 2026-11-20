@@ -10,12 +10,14 @@ class WitvParserTest {
     private val listPage = Jsoup.parse(
         """
         <div class="card">
-          <a href="/chaines-live/tf1"><img alt="TF1"/>Live Regarder</a>
+          <a href="/chaines-live/tf1"><img alt="TF1" src="/images/logo/tf1.png"/>Live Regarder</a>
         </div>
         <div class="card">
+          <img alt="Canal+" src="/images/logo/canal.png"/>
           <a href="https://witv.online/chaines-live/27-canal-plus.html">Regarder</a>
         </div>
         <a href="/chaines-live/sport/">Sport</a>
+        <a href="/chaines-live/cinema/">Cinéma</a>
         <a href="/chaines-live">Toutes les chaînes</a>
         """.trimIndent(),
         "https://witv.online/chaines-live"
@@ -38,6 +40,22 @@ class WitvParserTest {
         val slugs = channels.map { WitvParser.slugOf(it.url) }
         assertEquals(listOf("tf1", "canal-plus"), slugs)
         assertEquals("TF1", channels.first().name)
+        assertEquals("https://witv.online/images/logo/tf1.png", channels.first().posterUrl)
+        // Le 2e lien n'a qu'un texte générique : le nom vient du logo de sa carte.
+        assertEquals("Canal+", channels[1].name)
+        assertEquals("https://witv.online/images/logo/canal.png", channels[1].posterUrl)
+    }
+
+    @Test
+    fun exposesTheOfficialCategories() {
+        assertEquals(
+            listOf("sport", "cinema", "documentaire", "generaliste", "enfants", "info", "musique", "belgique", "suisse"),
+            WitvParser.channelCategories.map { it.slug }
+        )
+        assertEquals(
+            "https://witv.online/chaines-live/sport/",
+            WitvParser.categoryUrl("https://witv.online", "sport")
+        )
     }
 
     @Test
@@ -70,6 +88,25 @@ class WitvParserTest {
             WitvParser.findChannel(channels, "beIN SPORT 1")?.url
         )
         assertEquals(null, WitvParser.findChannel(channels, "M6"))
+    }
+
+    @Test
+    fun findsAChannelByItsPageUrl() {
+        val channels = listOf(WitvChannel("TF1", "https://witv.online/chaines-live/tf1"))
+        assertEquals(channels.first(), WitvParser.findChannelByUrl(channels, "https://witv.team/chaines-live/tf1"))
+        assertEquals(null, WitvParser.findChannelByUrl(channels, "https://witv.online/chaines-live/m6"))
+    }
+
+    @Test
+    fun cleansChannelPageTitles() {
+        assertEquals(
+            "TF1",
+            WitvParser.pageTitle(Jsoup.parse("<h1>TF1 - Live Tv Streaming</h1>", "https://witv.online/chaines-live/tf1"))
+        )
+        assertEquals(
+            "M6",
+            WitvParser.pageTitle(Jsoup.parse("<title>M6 – Live Tv Streaming</title>", "https://witv.online/chaines-live/m6"))
+        )
     }
 
     @Test

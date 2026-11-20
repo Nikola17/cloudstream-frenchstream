@@ -5,22 +5,18 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeoutOrNull
-import okhttp3.Interceptor
-import okhttp3.Request
-import okhttp3.Response
-import okhttp3.ResponseBody.Companion.toResponseBody
-import org.jsoup.nodes.Document
-import java.net.URI
-import java.net.URLEncoder
 import java.text.Normalizer
 import java.util.concurrent.atomic.AtomicBoolean
+import java.net.URI
 
+/**
+ * French-Stream TV : chaînes live + événements sportifs.
+ * Les événements et matchs viennent de BZH-Sport (bzzh.lat, ex Volkastream / OhQuelbut) ;
+ * les chaînes TV viennent de WITV (witv.online, witv.channel, …).
+ */
 class FSTVProvider : MainAPI() {
-    override var mainUrl = FSTV_BASE
+    override var mainUrl = WitvParser.knownBases.first()
     override var name = "French-Stream TV"
     override val hasMainPage = true
     override val hasQuickSearch = true
@@ -29,28 +25,35 @@ class FSTVProvider : MainAPI() {
     override var sequentialMainPage = true
     override val hasDownloadSupport = false
 
-    private val portalUrl = "https://fstream.info/"
     private val browserHeaders = mapOf("User-Agent" to USER_AGENT)
+
     private val bzhSport = BzhSportClient()
     private val witv = WitvClient(bzhSport)
 
     override val mainPage = listOf(
-        MainPageData(name = "🔴 Événements sport en direct", data = EVENTS_LIVE, horizontalImages = true),
-        MainPageData(name = "Événements sport aujourd'hui", data = EVENTS_TODAY, horizontalImages = true),
-        MainPageData(name = "Événements sport demain", data = EVENTS_TOMORROW, horizontalImages = true)
-    ) + FSTVParser.categories.map {
-        MainPageData(name = it.label, data = it.slug, horizontalImages = true)
+        MainPageData(name = "🔴 Matchs en direct", data = EVENTS_LIVE, horizontalImages = true),
+        MainPageData(name = "Matchs aujourd'hui", data = EVENTS_TODAY, horizontalImages = true),
+        MainPageData(name = "Matchs demain", data = EVENTS_TOMORROW, horizontalImages = true),
+        MainPageData(name = "📅 Matchs à venir", data = EVENTS_UPCOMING, horizontalImages = true),
+        MainPageData(name = "Toutes les chaînes", data = WITV_ALL, horizontalImages = true)
+    ) + WitvParser.channelCategories.map {
+        MainPageData(name = it.label, data = "${WITV_PREFIX}${it.slug}", horizontalImages = true)
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         if (page > 1) return newHomePageResponse(request, emptyList(), hasNext = false)
+
         if (request.data.startsWith(EVENTS_PREFIX)) {
             val events = eventsFor(request.data).map(::toEventSearchResponse)
             return newHomePageResponse(request, events, hasNext = false)
         }
-        val document = getFstvDocument(categoryUrl(request.data))
-        val channels = FSTVParser.channels(document).map(::toSearchResponse)
-        return newHomePageResponse(request, channels, hasNext = false)
+
+        val channels = if (request.data == WITV_ALL) {
+            witv.channels()
+        } else {
+            witv.categoryChannels(request.data.removePrefix(WITV_PREFIX))
+        }
+        return newHomePageResponse(request, channels.map(::toSearchResponse), hasNext = false)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
@@ -65,18 +68,7 @@ class FSTVProvider : MainAPI() {
             .let(BzhSportParser::ranked)
             .map(::toEventSearchResponse)
 
-        val channels = FSTVParser.categories.chunked(3).flatMap { batch ->
-            coroutineScope {
-                batch.map { category ->
-                    async {
-                        runCatching { getFstvDocument(categoryUrl(category.slug)) }
-                            .getOrNull()
-                            ?.let(FSTVParser::channels)
-                            .orEmpty()
-                    }
-                }.awaitAll().flatten()
-            }
-        }.distinctBy { it.url }
+        val channels = witv.channels()
             .filter { normalize(it.name).contains(normalizedQuery) }
             .map(::toSearchResponse)
         return channels + events
@@ -88,19 +80,8 @@ class FSTVProvider : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         if (bzhSport.isSiteUrl(url)) return loadBzhPage(url)
-
-        val document = getFstvDocument(url)
-        val config = FSTVParser.playerConfig(document)
-            ?: throw ErrorLoadingException("Chaîne TV indisponible")
-        val program = loadProgram(config.name, config.streamUrl)
-        val linkData = FSTVParser.linkData(document.baseUri(), config.name)
-
-        return newLiveStreamLoadResponse(config.name, document.baseUri(), linkData) {
-            posterUrl = config.posterUrl
-            posterHeaders = browserHeaders
-            plot = program?.let(::programDescription)
-            tags = listOfNotNull("TV en direct", program?.category)
-        }
+        if (witv.isSiteUrl(url)) return loadWitvPage(url)
+        throw ErrorLoadingException("Chaîne TV indisponible")
     }
 
     override suspend fun loadLinks(
@@ -110,77 +91,81 @@ class FSTVProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val linkData = FSTVParser.parseLinkData(data)
-        if (bzhSport.isSiteUrl(linkData.url)) {
-            val found = AtomicBoolean(false)
-            withTimeoutOrNull(BZH_EVENT_TIMEOUT_MS) {
-                runCatching {
-                    bzhSport.streams(linkData.url) { stream ->
-                        emitStreams(BzhSportClient.SOURCE_NAME, listOf(stream), callback)
-                        found.set(true)
-                    }
+
+        if (bzhSport.isSiteUrl(linkData.url)) return loadBzhLinks(linkData.url, callback)
+
+        if (witv.isSiteUrl(linkData.url)) {
+            val label = linkData.name ?: runCatching { witv.pageTitle(linkData.url) }.getOrNull() ?: "Chaîne TV"
+            val streams = withTimeoutOrNull(WITV_TIMEOUT_MS) {
+                runCatching { witv.streamsForPage(linkData.url, label) }.getOrNull()
+            }.orEmpty()
+            return emitStreams(WITV_SOURCE_NAME, streams, callback)
+        }
+
+        // Anciens favoris FSTV : l'URL d'origine ne répond plus, on retente par nom de chaîne.
+        val name = linkData.name ?: return false
+        val bzh = withTimeoutOrNull(BZH_TIMEOUT_MS) {
+            runCatching { bzhSport.channelStreams(name) }.getOrNull()
+        }.orEmpty()
+        if (emitStreams(BzhSportClient.SOURCE_NAME, bzh, callback)) return true
+        val witvStreams = withTimeoutOrNull(WITV_TIMEOUT_MS) {
+            runCatching { witv.channelStreams(name) }.getOrNull()
+        }.orEmpty()
+        return emitStreams(WITV_SOURCE_NAME, witvStreams, callback)
+    }
+
+    /** Matchs et événements BZH-Sport : envoi des flux dès qu'ils sont trouvés. */
+    private suspend fun loadBzhLinks(url: String, callback: (ExtractorLink) -> Unit): Boolean {
+        val found = AtomicBoolean(false)
+        withTimeoutOrNull(BZH_EVENT_TIMEOUT_MS) {
+            runCatching {
+                bzhSport.streams(url) { stream ->
+                    emitStreams(BzhSportClient.SOURCE_NAME, listOf(stream), callback)
+                    found.set(true)
                 }
             }
-            return found.get()
         }
+        return found.get()
+    }
 
-        return coroutineScope {
-            // BZH-Sport et WITV servent de secours quand les flux French-Stream TV ne fonctionnent pas.
-            val knownBzh = linkData.name?.let { channelName ->
-                async { bzhStreams { bzhSport.channelStreams(channelName) } }
-            }
-            val knownWitv = linkData.name?.let { channelName ->
-                async { bzhStreams { witv.channelStreams(channelName) } }
-            }
-            val fstvChannel = loadFstvLinks(linkData.url, callback)
-            val fallbackName = linkData.name ?: fstvChannel
-            val fallback = knownBzh?.await()
-                ?: fallbackName?.let { channelName -> bzhStreams { bzhSport.channelStreams(channelName) } }
-                    .orEmpty()
-            val witvFallback = knownWitv?.await()
-                ?: fallbackName?.let { channelName -> bzhStreams { witv.channelStreams(channelName) } }
-                    .orEmpty()
-            val hasFallback = emitStreams(BzhSportClient.SOURCE_NAME, fallback, callback)
-            val hasWitv = emitStreams(WITV_SOURCE_NAME, witvFallback, callback)
-            fstvChannel != null || hasFallback || hasWitv
+    private suspend fun loadBzhPage(url: String): LoadResponse {
+        // Les infos de l'accueil suffisent pour la fiche : la page de l'événement, lente à
+        // charger, n'est récupérée qu'au lancement de la lecture.
+        val event = runCatching { bzhSport.events() }.getOrNull().orEmpty()
+            .firstOrNull { samePath(it.url, url) }
+        val document = if (event == null) {
+            bzhSport.page(url) ?: throw ErrorLoadingException("BZH-Sport est indisponible")
+        } else null
+        val pageUrl = event?.url ?: document?.baseUri() ?: url
+        val title = event?.title
+            ?: document?.let(BzhSportParser::pageTitle)
+            ?: BzhSportClient.SOURCE_NAME
+
+        return newLiveStreamLoadResponse(title, pageUrl, FSTVParser.linkData(pageUrl, title)) {
+            posterUrl = event?.let { BzhSportParser.posterUrl(it.sport) }
+            posterHeaders = browserHeaders
+            plot = event?.let(::eventDescription)
+                ?: "Chaîne en direct via ${BzhSportClient.SOURCE_NAME}"
+            tags = listOfNotNull(
+                "Sport en direct",
+                event?.sport?.let(BzhSportParser.sportLabels::get),
+                event?.competition
+            ).distinct()
         }
     }
 
-    /** Envoie les liens French-Stream TV et renvoie le nom de la chaîne, ou null si aucun lien. */
-    private suspend fun loadFstvLinks(url: String, callback: (ExtractorLink) -> Unit): String? {
-        val document = runCatching { getFstvDocument(url) }.getOrNull() ?: return null
-        val config = FSTVParser.playerConfig(document) ?: return null
-        val origin = origin(config.streamUrl) ?: return null
-        val streamHeaders = browserHeaders + mapOf(
-            "Referer" to document.baseUri(),
-            "Origin" to origin
-        )
+    private suspend fun loadWitvPage(url: String): LoadResponse {
+        val channel = runCatching { witv.findChannel(url) }.getOrNull()
+        val name = channel?.name
+            ?: runCatching { witv.pageTitle(url) }.getOrNull()
+            ?: "Chaîne TV"
 
-        val (primaryQuality, alternatives) = coroutineScope {
-            val qualityRequest = async {
-                withTimeoutOrNull(4_000L) {
-                    runCatching {
-                        FSTVParser.highestHlsQuality(
-                            app.get(config.streamUrl, headers = streamHeaders, timeout = 4L).text
-                        )
-                    }.getOrNull()
-                } ?: Qualities.Unknown.value
-            }
-            val sourceRequest = async { loadAlternativeSources(config.name, origin) }
-            qualityRequest.await() to sourceRequest.await()
+        return newLiveStreamLoadResponse(name, url, FSTVParser.linkData(url, name)) {
+            posterUrl = channel?.posterUrl
+            posterHeaders = browserHeaders
+            plot = "Chaîne en direct via WITV"
+            tags = listOf("TV en direct")
         }
-
-        FSTVParser.playbackSources(config, primaryQuality, alternatives).forEach { source ->
-            callback(newExtractorLink(name, source.label, source.url, ExtractorLinkType.M3U8) {
-                referer = document.baseUri()
-                headers = streamHeaders
-                quality = source.quality
-            })
-        }
-        return config.name
-    }
-
-    private suspend fun bzhStreams(block: suspend () -> List<BzhStream>): List<BzhStream> {
-        return withTimeoutOrNull(BZH_TIMEOUT_MS) { runCatching { block() }.getOrNull() }.orEmpty()
     }
 
     private suspend fun emitStreams(sourceName: String, streams: List<BzhStream>, callback: (ExtractorLink) -> Unit): Boolean {
@@ -205,38 +190,13 @@ class FSTVProvider : MainAPI() {
         return streams.isNotEmpty()
     }
 
-    private suspend fun loadBzhPage(url: String): LoadResponse {
-        // Les infos de l'accueil suffisent pour la fiche : la page de l'événement, lente à
-        // charger, n'est récupérée qu'au lancement de la lecture.
-        val event = runCatching { bzhSport.events() }.getOrNull().orEmpty()
-            .firstOrNull { samePath(it.url, url) }
-        val document = if (event == null) {
-            bzhSport.page(url) ?: throw ErrorLoadingException("BZH-Sport est indisponible")
-        } else null
-        val pageUrl = event?.url ?: document?.baseUri() ?: url
-        val title = event?.title
-            ?: document?.let(BzhSportParser::pageTitle)
-            ?: BzhSportClient.SOURCE_NAME
-
-        return newLiveStreamLoadResponse(title, pageUrl, pageUrl) {
-            posterUrl = event?.let { BzhSportParser.posterUrl(it.sport) }
-            posterHeaders = browserHeaders
-            plot = event?.let(::eventDescription)
-                ?: "Chaîne en direct via ${BzhSportClient.SOURCE_NAME}"
-            tags = listOfNotNull(
-                "Sport en direct",
-                event?.sport?.let(BzhSportParser.sportLabels::get),
-                event?.competition
-            ).distinct()
-        }
-    }
-
     private suspend fun eventsFor(section: String): List<BzhEvent> {
         val events = runCatching { bzhSport.events() }.getOrNull().orEmpty()
         val selected = when (section) {
             EVENTS_LIVE -> events.filter { it.isLive }
             EVENTS_TODAY -> events.filter { !it.isLive && it.day == BzhEventDay.TODAY }
             EVENTS_TOMORROW -> events.filter { it.day == BzhEventDay.TOMORROW }
+            EVENTS_UPCOMING -> events.filter { it.day == BzhEventDay.LATER }
             else -> emptyList()
         }
         return BzhSportParser.ranked(selected).take(MAX_EVENTS_PER_SECTION)
@@ -250,6 +210,13 @@ class FSTVProvider : MainAPI() {
         }
         return newLiveSearchResponse(name, event.url) {
             posterUrl = BzhSportParser.posterUrl(event.sport)
+            posterHeaders = browserHeaders
+        }
+    }
+
+    private fun toSearchResponse(channel: WitvChannel): SearchResponse {
+        return newLiveSearchResponse(channel.name, channel.url) {
+            posterUrl = channel.posterUrl
             posterHeaders = browserHeaders
         }
     }
@@ -269,185 +236,10 @@ class FSTVProvider : MainAPI() {
         return firstPath.equals(secondPath, ignoreCase = true)
     }
 
-    override fun getVideoInterceptor(extractorLink: ExtractorLink): Interceptor? {
-        val streamHost = host(extractorLink.url) ?: return null
-        val providerHost = host(mainUrl) ?: return null
-        if (!streamHost.equals(providerHost, ignoreCase = true)) return null
-
-        return Interceptor { chain ->
-            val request = chain.request()
-            if (request.url.host.equals(providerHost, ignoreCase = true)) {
-                executeFstvRequest(chain, request)
-            } else {
-                chain.proceed(request)
-            }
-        }
-    }
-
-    private fun executeFstvRequest(chain: Interceptor.Chain, request: Request): Response {
-        var response = chain.proceed(requestForAttempt(request))
-        var proxyAttempts = 1
-        if (isTransientGatewayError(response.code)) {
-            FSTVParser.directSegmentUrl(request.url.toString())?.let { directUrl ->
-                response.close()
-                val directResponse = runCatching {
-                    chain.proceed(request.newBuilder().url(directUrl).build())
-                }.getOrNull()
-                if (directResponse?.isSuccessful == true) return directResponse
-                directResponse?.close()
-                response = chain.proceed(requestForAttempt(request))
-                proxyAttempts++
-            }
-        }
-        while (isTransientGatewayError(response.code) && proxyAttempts < 3) {
-            response.close()
-            response = chain.proceed(requestForAttempt(request))
-            proxyAttempts++
-        }
-        return patchPlaylistResponse(response)
-    }
-
-    private fun requestForAttempt(request: Request): Request {
-        if (!FSTVParser.isProxiedMediaPlaylist(request.url.toString())) return request
-        val freshUrl = request.url.newBuilder()
-            .setQueryParameter("cs_no_cache", System.nanoTime().toString())
-            .build()
-        return request.newBuilder()
-            .url(freshUrl)
-            .header("Cache-Control", "no-cache")
-            .header("Pragma", "no-cache")
-            .build()
-    }
-
-    private fun isTransientGatewayError(code: Int): Boolean {
-        return code == 502 || code == 503 || code == 504
-    }
-
-    private fun patchPlaylistResponse(response: Response): Response {
-        val body = response.body
-        val contentType = body.contentType()
-        if (!contentType.toString().contains("mpegurl", ignoreCase = true)) return response
-        val manifest = body.string()
-        return response.newBuilder()
-            .removeHeader("Content-Length")
-            .body(FSTVParser.normalizeHlsManifest(manifest).toResponseBody(contentType))
-            .build()
-    }
-
-    private fun toSearchResponse(channel: FSTVChannel): SearchResponse {
-        return newLiveSearchResponse(channel.name, channel.url) {
-            posterUrl = channel.posterUrl
-            posterHeaders = browserHeaders
-        }
-    }
-
-    private suspend fun loadProgram(channelName: String, streamUrl: String): FSTVProgram? {
-        val origin = origin(streamUrl) ?: return null
-        return withTimeoutOrNull(3_000L) {
-            runCatching {
-                FSTVParser.program(
-                    app.get(
-                        "$origin/live.php?epg=${encode(channelName)}",
-                        headers = browserHeaders,
-                        timeout = 3L
-                    ).text
-                )
-            }.getOrNull()
-        }
-    }
-
-    private suspend fun loadAlternativeSources(channelName: String, origin: String): List<FSTVSource> {
-        return withTimeoutOrNull(4_000L) {
-            runCatching {
-                FSTVParser.sources(
-                    app.get(
-                        "$origin/live.php?q=1&sources=${encode(channelName)}",
-                        headers = browserHeaders,
-                        timeout = 4L
-                    ).text
-                )
-            }.getOrNull()
-        }.orEmpty()
-    }
-
-    private suspend fun getFstvDocument(url: String): Document {
-        fetchValidDocument(url)?.let { return it }
-
-        // Miroirs connus du service TV (fstv.lol, fstv.rest…) avant de consulter le portail.
-        for (base in FSTV_BASES) {
-            if (url.startsWith(base, ignoreCase = true)) continue
-            fetchValidDocument(replaceOrigin(url, base))?.let {
-                mainUrl = base
-                return it
-            }
-        }
-
-        val discoveredBase = discoverCurrentBase()
-            ?: throw ErrorLoadingException("French-Stream TV est indisponible")
-        mainUrl = discoveredBase
-        val retryUrl = replaceOrigin(url, discoveredBase)
-        return fetchValidDocument(retryUrl)
-            ?: throw ErrorLoadingException("French-Stream TV est indisponible")
-    }
-
-    private suspend fun fetchValidDocument(url: String): Document? {
-        val response = runCatching {
-            app.get(url, headers = browserHeaders, timeout = 10L)
-        }.getOrNull() ?: return null
-        if (!response.isSuccessful) return null
-        val document = response.document
-        document.setBaseUri(url)
-        return document.takeIf(::isFstvDocument)
-    }
-
-    private suspend fun discoverCurrentBase(): String? {
-        val portal = runCatching {
-            app.get(portalUrl, headers = browserHeaders, timeout = 10L)
-        }.getOrNull() ?: return null
-        if (!portal.isSuccessful) return null
-        return FSTVParser.portalTvBaseUrl(portal.document)
-    }
-
-    private fun isFstvDocument(document: Document): Boolean {
-        val html = document.toString()
-        return document.select("div.short").isNotEmpty() ||
-            html.contains("window.FSTV_NAME", ignoreCase = true) ||
-            html.contains("fsplayer", ignoreCase = true) ||
-            html.contains("French Stream TV", ignoreCase = true)
-    }
-
-    private fun categoryUrl(slug: String): String {
-        return "$mainUrl/index.php?category=${encode(slug)}&do=cat"
-    }
-
-    private fun replaceOrigin(url: String, newOrigin: String): String {
-        val uri = runCatching { URI(url) }.getOrNull() ?: return url
-        val path = uri.rawPath?.takeIf { it.isNotBlank() } ?: "/"
-        val query = uri.rawQuery?.let { "?$it" }.orEmpty()
-        val fragment = uri.rawFragment?.let { "#$it" }.orEmpty()
-        return "$newOrigin$path$query$fragment"
-    }
-
     private fun origin(url: String): String? {
         return runCatching { URI(url) }.getOrNull()?.let { uri ->
             "${uri.scheme}://${uri.authority}"
         }
-    }
-
-    private fun host(url: String): String? {
-        return runCatching { URI(url).host }.getOrNull()
-    }
-
-    private fun programDescription(program: FSTVProgram): String {
-        val remaining = program.remainingSeconds
-            ?.let { seconds -> ((seconds + 59) / 60).takeIf { it > 0 } }
-            ?.let { minutes -> " ($minutes min restantes)" }
-            .orEmpty()
-        return buildList {
-            add("En direct : ${program.currentTitle}$remaining")
-            program.category?.let { add(it) }
-            program.nextTitle?.let { add("À suivre : $it") }
-        }.joinToString("\n")
     }
 
     private fun normalize(value: String): String {
@@ -457,18 +249,18 @@ class FSTVProvider : MainAPI() {
             .trim()
     }
 
-    private fun encode(value: String): String = URLEncoder.encode(value, "UTF-8")
-
     companion object {
-        const val FSTV_BASE = "https://fstv.lol"
-        val FSTV_BASES = listOf("https://fstv.lol", "https://fstv.rest")
-        const val WITV_SOURCE_NAME = "WITV"
         private const val EVENTS_PREFIX = "bzh-events:"
         private const val EVENTS_LIVE = "${EVENTS_PREFIX}live"
         private const val EVENTS_TODAY = "${EVENTS_PREFIX}today"
         private const val EVENTS_TOMORROW = "${EVENTS_PREFIX}tomorrow"
+        private const val EVENTS_UPCOMING = "${EVENTS_PREFIX}upcoming"
+        private const val WITV_PREFIX = "witv:"
+        private const val WITV_ALL = "${WITV_PREFIX}all"
+        const val WITV_SOURCE_NAME = "WITV"
         private const val MAX_EVENTS_PER_SECTION = 60
         private const val BZH_TIMEOUT_MS = 15_000L
         private const val BZH_EVENT_TIMEOUT_MS = 45_000L
+        private const val WITV_TIMEOUT_MS = 30_000L
     }
 }
