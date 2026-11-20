@@ -6,8 +6,11 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.TimeZone
 
 class BzhSportParserTest {
+    private val utc = TimeZone.getTimeZone("UTC")
+
     private val home = Jsoup.parse(
         """
         <div class="channels"><a href="https://bzh.lat/regarder-la-chaine-Eurosport-1-en-direct-streaming-gratuit"> Eurosport 1 </a></div>
@@ -57,7 +60,7 @@ class BzhSportParserTest {
 
     @Test
     fun parsesScheduledEvents() {
-        val events = BzhSportParser.events(home)
+        val events = BzhSportParser.events(home, displayTimeZone = utc)
 
         assertEquals(5, events.size)
         assertEquals(
@@ -70,7 +73,9 @@ class BzhSportParserTest {
                 url = "https://bzh.lat/Tour-de-Lombardie-streaming-direct",
                 sport = "cyclisme",
                 isLive = true,
-                position = 0
+                position = 0,
+                utcMinutes = 9 * 60 + 35,
+                dateSortKey = null
             ),
             events.first()
         )
@@ -80,19 +85,100 @@ class BzhSportParserTest {
         assertFalse(events[2].isLive)
         assertEquals(BzhEventDay.TOMORROW, events[3].day)
         assertEquals(BzhEventDay.LATER, events[4].day)
+        assertEquals(20261013, events[4].dateSortKey)
     }
 
     @Test
-    fun ranksPopularEventsFirst() {
-        val ranked = BzhSportParser.ranked(BzhSportParser.events(home)).map { it.title }
+    fun parsesCurrentBzzhTableWithoutEventClassOnRows() {
+        val bzzh2026 = Jsoup.parse(
+            """
+            <table class="table table-dark">
+              <tbody>
+                <tr>
+                  <td><img src="https://bzzh.lat/assets/uploads/cat/1.png" /></td>
+                  <td>aujourd'hui</td>
+                  <td class="dt">19:45</td>
+                  <td class="hidden-xs">Ligue 1</td>
+                  <td class="event-title">Troyes - Le Havre</td>
+                  <td><a href="https://bzzh.lat/Troyes---Le-Havre-streaming-direct" class="event btn btn-danger btn-xs">Regarder</a></td>
+                  <td><img src="https://bzzh.lat/assets/images/live.gif" /></td>
+                </tr>
+                <tr>
+                  <td><img src="https://bzzh.lat/assets/uploads/cat/4.png" /></td>
+                  <td>aujourd'hui</td>
+                  <td class="dt">18:30</td>
+                  <td class="hidden-xs">Pro D2</td>
+                  <td class="event-title">AS Béziers - US Dax</td>
+                  <td><a href="https://bzzh.lat/AS-Beziers---US-Dax-streaming-direct" class="event btn btn-danger btn-xs">Regarder</a></td>
+                  <td><img src="https://bzzh.lat/assets/images/live.gif" /></td>
+                </tr>
+              </tbody>
+            </table>
+            """.trimIndent(),
+            "https://bzzh.lat/"
+        )
+
+        assertTrue(BzhSportParser.isSiteDocument(bzzh2026))
+        val events = BzhSportParser.events(bzzh2026, displayTimeZone = TimeZone.getTimeZone("GMT+01:00"))
+        assertEquals(2, events.size)
+        assertEquals("Troyes - Le Havre", events[0].title)
+        assertEquals("20:45", events[0].time)
+        assertEquals(19 * 60 + 45, events[0].utcMinutes)
+        assertEquals("foot", events[0].sport)
+        assertTrue(events[0].isLive)
+        assertEquals("19:30", events[1].time)
+        assertEquals("rugby", events[1].sport)
+    }
+
+    @Test
+    fun alwaysRanksFootballFirstThenInterestAndKickoffProximity() {
+        val now = 20 * 60 + 15 // 20:15 UTC
+        val events = listOf(
+            // Non-foot très populaire mais ne doit jamais passer devant le foot
+            event("Grand Prix de Monaco", "Formule 1", sport = "f1", isLive = true, utcMinutes = 20 * 60),
+            // Foot démarré il y a 4h (probablement fini)
+            event("Vieux Match Foot", "Ligue 1", sport = "foot", isLive = true, utcMinutes = 16 * 60),
+            // Foot en direct, Ligue 2 démarré il y a 75 min
+            event("Metz - Boulogne", "Ligue 2", sport = "foot", isLive = true, utcMinutes = 19 * 60),
+            // Foot en direct, LaLiga démarré il y a 15 min
+            event("Ath Bilbao - Espanyol", "Laliga", sport = "foot", isLive = true, utcMinutes = 20 * 60),
+            // Foot en direct, Ligue 1 démarré il y a 30 min (meilleur intérêt)
+            event("Troyes - Le Havre", "Ligue 1", sport = "foot", isLive = true, utcMinutes = 19 * 60 + 45),
+            // Foot en direct, Bundesliga + Bayern démarré il y a 45 min (75 + 15 = 90)
+            event("Bayern Munich - Cologne", "Bundesliga", sport = "foot", isLive = true, utcMinutes = 19 * 60 + 30)
+        )
+
+        val ranked = BzhSportParser.ranked(events, nowUtcMinutes = now).map { it.title }
 
         assertEquals(
             listOf(
-                "Arsenal - Lille OSC",
-                "PSG - Le Mans",
-                "Tour de Lombardie",
-                "Darmstadt - Cottbus",
-                "Canal Football Club"
+                "Troyes - Le Havre",        // Foot actif, Ligue 1 (95)
+                "Bayern Munich - Cologne",  // Foot actif, Bundesliga + Bayern (90)
+                "Ath Bilbao - Espanyol",    // Foot actif, LaLiga (80)
+                "Metz - Boulogne",          // Foot actif, Ligue 2 (55)
+                "Vieux Match Foot",         // Foot ancien (> 3h, tier 2)
+                "Grand Prix de Monaco"      // Autre sport (toujours après le foot)
+            ),
+            ranked
+        )
+    }
+
+    @Test
+    fun prioritizesImminentTodayMatchesClosestToKickoff() {
+        val now = 20 * 60 + 15 // 20:15 UTC
+        val events = listOf(
+            event("PSG - Marseille", "Ligue 1", sport = "foot", isLive = false, utcMinutes = 23 * 60 + 45),
+            event("FC Porto - Paredes", "Coupe Du Portugal", sport = "foot", isLive = false, utcMinutes = 20 * 60 + 45),
+            event("Pologne F - Suède F", "Billie Jean King Cup", sport = "tennis", isLive = false, utcMinutes = 20 * 60 + 30)
+        )
+
+        val ranked = BzhSportParser.ranked(events, nowUtcMinutes = now).map { it.title }
+
+        assertEquals(
+            listOf(
+                "FC Porto - Paredes",   // Foot imminent (dans 30 min, tier 0)
+                "PSG - Marseille",      // Foot plus tard (dans 3h30, tier 2)
+                "Pologne F - Suède F"   // Tennis après le foot
             ),
             ranked
         )
@@ -101,7 +187,7 @@ class BzhSportParserTest {
     @Test
     fun keepsHandballChampionsLeagueBelowFootball() {
         val football = event("Real Madrid - Villarreal", "Laliga")
-        val handball = event("Gyor - Metz", "Ligue des champions EHF")
+        val handball = event("Gyor - Metz", "Ligue des champions EHF", sport = "handball")
         val france = event("France F - Lettonie F", "Amical International")
 
         assertTrue(BzhSportParser.popularity(football) > BzhSportParser.popularity(handball))
@@ -222,15 +308,22 @@ class BzhSportParserTest {
         )
     }
 
-    private fun event(title: String, competition: String?) = BzhEvent(
+    private fun event(
+        title: String,
+        competition: String?,
+        sport: String = "foot",
+        isLive: Boolean = false,
+        utcMinutes: Int = 20 * 60
+    ) = BzhEvent(
         title = title,
         competition = competition,
         dayLabel = "aujourd'hui",
         day = BzhEventDay.TODAY,
-        time = "20:00",
-        url = "https://bzh.lat/x-streaming-direct",
-        sport = "foot",
-        isLive = false,
-        position = 0
+        time = "%02d:%02d".format(utcMinutes / 60, utcMinutes % 60),
+        url = "https://bzh.lat/${title.replace(' ', '-')}-streaming-direct",
+        sport = sport,
+        isLive = isLive,
+        position = 0,
+        utcMinutes = utcMinutes
     )
 }

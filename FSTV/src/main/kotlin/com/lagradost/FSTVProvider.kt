@@ -102,10 +102,21 @@ class FSTVProvider : MainAPI() {
 
         if (witv.isSiteUrl(linkData.url)) {
             val label = linkData.name ?: runCatching { witv.pageTitle(linkData.url) }.getOrNull() ?: "Chaîne TV"
-            val streams = withTimeoutOrNull(WITV_TIMEOUT_MS) {
-                runCatching { witv.streamsForPage(linkData.url, label) }.getOrNull()
+            val found = AtomicBoolean(false)
+            withTimeoutOrNull(WITV_TIMEOUT_MS) {
+                runCatching {
+                    witv.streamsForPage(linkData.url, label) { stream ->
+                        emitStreams(WITV_SOURCE_NAME, listOf(stream), callback)
+                        found.set(true)
+                    }
+                }
+            }
+            if (found.get()) return true
+            // Secours BZH-Sport si aucun flux WITV n'a répondu pour cette chaîne.
+            val bzhFallback = withTimeoutOrNull(BZH_TIMEOUT_MS) {
+                runCatching { bzhSport.channelStreams(label) }.getOrNull()
             }.orEmpty()
-            return emitStreams(WITV_SOURCE_NAME, streams, callback)
+            return emitStreams(BzhSportClient.SOURCE_NAME, bzhFallback, callback)
         }
 
         // Anciens favoris FSTV : l'URL d'origine ne répond plus, on retente par nom de chaîne.
@@ -213,6 +224,7 @@ class FSTVProvider : MainAPI() {
 
     private fun toEventSearchResponse(event: BzhEvent): SearchResponse {
         val name = when {
+            event.isLive && event.time != null -> "🔴 ${event.time} · ${event.title}"
             event.isLive -> "🔴 ${event.title}"
             event.time != null -> "${event.time} · ${event.title}"
             else -> event.title

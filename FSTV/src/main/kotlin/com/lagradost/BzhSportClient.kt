@@ -111,10 +111,15 @@ internal class BzhSportClient {
         val (request, _) = WebViewResolver(Regex("""\.m3u8"""), timeout = BROWSER_TIMEOUT_MS)
             .resolveUsingWebView(url, referer = referer)
         val found = request ?: return null
-        return found.url.toString() to (found.header("referer") ?: url)
+        val streamUrl = found.url.toString()
+        if (streamUrl.contains("vc=notice", ignoreCase = true)) return null
+        return streamUrl to (found.header("referer") ?: url)
     }
 
     private suspend fun resolve(url: String, referer: String, depth: Int): List<Pair<String, String>> {
+        if (url.contains(".m3u8", ignoreCase = true)) {
+            return if (url.contains("vc=notice", ignoreCase = true)) emptyList() else listOf(url to referer)
+        }
         val (html, pageUrl) = withTimeoutOrNull(REQUEST_TIMEOUT_MS) {
             runCatching {
                 val response = app.get(
@@ -126,7 +131,7 @@ internal class BzhSportClient {
             }.getOrNull()
         } ?: return emptyList()
 
-        val hls = BzhSportParser.hlsUrls(html)
+        val hls = BzhSportParser.hlsUrls(html).filterNot { it.contains("vc=notice", ignoreCase = true) }
         if (hls.isNotEmpty()) return hls.map { it to pageUrl }
         if (depth >= MAX_FRAME_DEPTH) return emptyList()
 

@@ -2,8 +2,10 @@ package com.lagradost
 
 import org.jsoup.Jsoup
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.Base64
 
 class WitvParserTest {
 
@@ -14,7 +16,7 @@ class WitvParserTest {
         </div>
         <div class="card">
           <img alt="Canal+" src="/images/logo/canal.png"/>
-          <a href="https://witv.online/chaines-live/27-canal-plus.html">Regarder</a>
+          <a href="https://witv.channel/chaines-live/27-canal-plus.html">Regarder</a>
         </div>
         <a href="/chaines-live/sport/">Sport</a>
         <a href="/chaines-live/cinema/">Cinéma</a>
@@ -25,8 +27,24 @@ class WitvParserTest {
         <div class="card" style="background-image:url('/images/logo/arte-logo.png')">
           <a href="/chaines-live/arte">Regarder</a>
         </div>
+        <div class="ann-short_item">
+          <a href="https://witv.channel/chaines-live/70-comedie.html">Regarder</a>
+          <div class="ann-short_price">Comédie+ HD</div>
+          <img src="/images/logo/Comédie+logo.png" alt="Comédie+ HD"/>
+        </div>
+        <div class="ann-short_item">
+          <a href="https://witv.channel/chaines-live/200-tnt-sports-2-uk.html">Regarder</a>
+          <div class="ann-short_price">TNT Sports 2 UK</div>
+          <img src="https://media.info/l/o/1/1540.1690027877.png" alt="TNT Sports 2 UK"/>
+        </div>
+        <div class="ann-short_item">
+          <a href="/chaines-live/ab1">Regarder</a>
+          <div class="ann-short_price">AB1</div>
+          <img src="/assets/img/channel-placeholder.svg" alt="AB1"/>
+        </div>
+        <a href="https://witv.channel/chaines-live/page/2/">Suivant</a>
         """.trimIndent(),
-        "https://witv.online/chaines-live"
+        "https://witv.channel/chaines-live/"
     )
 
     private val channelPage = Jsoup.parse(
@@ -37,23 +55,109 @@ class WitvParserTest {
         <iframe src="https://zonalive.example/embed/abc"></iframe>
         <iframe src="https://www.youtube.com/embed/xyz"></iframe>
         """.trimIndent(),
-        "https://witv.online/chaines-live/tf1"
+        "https://witv.channel/chaines-live/tf1"
     )
 
     @Test
-    fun parsesChannelLinksAndSkipsCategories() {
+    fun prioritizesOfficialWitvChannelDomainFirst() {
+        assertEquals("https://witv.channel", WitvParser.knownBases.first())
+    }
+
+    @Test
+    fun parsesChannelLinksEncodesAccentsAndAppliesFallbackLogos() {
         val channels = WitvParser.channels(listPage)
         val bySlug = channels.associateBy { WitvParser.slugOf(it.url) }
-        assertEquals(setOf("tf1", "canal-plus", "6ter", "arte"), bySlug.keys)
+        assertEquals(
+            setOf("tf1", "canal-plus", "6ter", "arte", "comedie", "tnt-sports-2-uk", "ab1"),
+            bySlug.keys
+        )
         assertEquals("TF1", bySlug["tf1"]?.name)
-        assertEquals("https://witv.online/images/logo/tf1.png", bySlug["tf1"]?.posterUrl)
-        // Le 2e lien n'a qu'un texte générique : le nom vient du logo de sa carte.
+        assertEquals("https://witv.channel/images/logo/tf1.png", bySlug["tf1"]?.posterUrl)
         assertEquals("Canal+", bySlug["canal-plus"]?.name)
-        assertEquals("https://witv.online/images/logo/canal.png", bySlug["canal-plus"]?.posterUrl)
-        // data-src prioritaire sur un src placeholder ; background-image CSS en secours.
-        assertEquals("https://witv.online/images/logo/6ter-logo.png", bySlug["6ter"]?.posterUrl)
-        assertEquals("https://witv.online/images/logo/arte-logo.png", bySlug["arte"]?.posterUrl)
-        assertEquals("arte", bySlug["arte"]?.name)
+        assertEquals("https://witv.channel/images/logo/canal.png", bySlug["canal-plus"]?.posterUrl)
+        assertEquals("https://witv.channel/images/logo/6ter-logo.png", bySlug["6ter"]?.posterUrl)
+        assertEquals("https://witv.channel/images/logo/arte-logo.png", bySlug["arte"]?.posterUrl)
+        // Accents encodés en ASCII pour Android/Coil
+        assertEquals("Comédie+ HD", bySlug["comedie"]?.name)
+        assertEquals("https://witv.channel/images/logo/Com%C3%A9die+logo.png", bySlug["comedie"]?.posterUrl)
+        // Logo cassé media.info remplacé par un logo vérifié
+        assertEquals(
+            "https://raw.githubusercontent.com/tv-logo/tv-logos/main/countries/united-kingdom/tnt-sports-2-uk.png",
+            bySlug["tnt-sports-2-uk"]?.posterUrl
+        )
+        // Placeholder SVG remplacé par un logo de secours vérifié
+        assertEquals(
+            "https://raw.githubusercontent.com/tv-logo/tv-logos/main/countries/france/ab1-fr.png",
+            bySlug["ab1"]?.posterUrl
+        )
+        // Pagination DLE détectée
+        assertEquals(
+            "https://witv.channel/chaines-live/page/2/",
+            WitvParser.nextPageUrl(listPage, "https://witv.channel/chaines-live/", 2)
+        )
+    }
+
+    @Test
+    fun decodesWitvChannelVmapPlayerLinksInOrder() {
+        val vmapJson = """{"wt1_second":"/player/source2/?id=222","wt1_first":"/player/source2/?id=111"}"""
+        val b64 = Base64.getEncoder().encodeToString(vmapJson.toByteArray(Charsets.UTF_8))
+        val payload = "key123|salt456|$b64"
+        val mask = 119
+        val encodedArray = payload.map { it.code xor mask }.joinToString(",")
+
+        val doc = Jsoup.parse(
+            """
+            <div class="player-content" id="player1" data-v="wt1_first"></div>
+            <div class="player-content" id="player2" data-v="wt1_second"></div>
+            <script type="speculationrules">{"not":{"href_matches":"/player/*"}}</script>
+            <script>(function(){var _a=[$encodedArray],_m=$mask,_in=1195;})();</script>
+            """.trimIndent(),
+            "https://witv.channel/chaines-live/18-canal-foot.html"
+        )
+
+        assertEquals(
+            listOf(
+                "https://witv.channel/player/source2/?id=111",
+                "https://witv.channel/player/source2/?id=222"
+            ),
+            WitvParser.playerLinks(doc)
+        )
+    }
+
+    @Test
+    fun extractsDirectWtPayloadAndServerMirrorsWhileIgnoringNoticeDecoy() {
+        val realPath = "/player/source2/?vp=e1_realstream&tk=abc123&vc=stream1"
+        val reversedB64 = Base64.getEncoder().encodeToString(realPath.toByteArray(Charsets.UTF_8)).reversed()
+
+        val directHtml = """
+            <script>
+              var m3u8Url = "\/player\/source2\/?vp=d2l0dl9ub3RpY2UubTN1OA&vc=notice";
+              var _wtPayload = "$reversedB64";
+              m3u8Url = atob(_wtPayload.split('').reverse().join(''));
+            </script>
+        """.trimIndent()
+
+        val direct = WitvParser.extractPlayerStreams(directHtml, "https://witv.channel/player/source2/?id=111")
+        assertEquals(
+            listOf("https://witv.channel/player/source2/?vp=e1_realstream&tk=abc123&vc=stream1"),
+            direct.directHls
+        )
+
+        val mirrorHtml = """
+            <button class="server-btn active" data-url="https://foot2026.lat/part/Ll.php?id=3/24">S1</button>
+            <button class="server-btn" data-url="https://wideiptv.top/daddy.php?stream=TF1FR">S2</button>
+            <iframe id="mainStreamFrame" src="https://foot2026.lat/part/Ll.php?id=3/24"></iframe>
+        """.trimIndent()
+
+        val mirrors = WitvParser.extractPlayerStreams(mirrorHtml, "https://witv.channel/player/source2/?id=469")
+        assertTrue(mirrors.directHls.isEmpty())
+        assertEquals(
+            listOf(
+                "https://foot2026.lat/part/Ll.php?id=3/24",
+                "https://wideiptv.top/daddy.php?stream=TF1FR"
+            ),
+            mirrors.embedUrls
+        )
     }
 
     @Test
@@ -63,9 +167,10 @@ class WitvParserTest {
             <img src="/images/nav.png"/>
             <img src="/images/logo/m6-logo.png"/>
             """.trimIndent(),
-            "https://witv.online/chaines-live/m6"
+            "https://witv.channel/chaines-live/m6"
         )
-        assertEquals("https://witv.online/images/logo/m6-logo.png", WitvParser.pagePoster(page))
+        assertEquals("https://witv.channel/images/logo/m6-logo.png", WitvParser.pagePoster(page))
+        assertNotNull(WitvParser.fallbackLogo("RTS1"))
     }
 
     @Test
@@ -75,8 +180,8 @@ class WitvParserTest {
             WitvParser.channelCategories.map { it.slug }
         )
         assertEquals(
-            "https://witv.online/chaines-live/sport/",
-            WitvParser.categoryUrl("https://witv.online", "sport")
+            "https://witv.channel/chaines-live/sport/",
+            WitvParser.categoryUrl("https://witv.channel", "sport")
         )
     }
 
@@ -85,8 +190,8 @@ class WitvParserTest {
         val links = WitvParser.playerLinks(channelPage)
         assertEquals(
             listOf(
-                "https://witv.online/player/source1/?id=469",
-                "https://witv.online/player/source2/?id=webtv_tf1_hd",
+                "https://witv.channel/player/source1/?id=469",
+                "https://witv.channel/player/source2/?id=webtv_tf1_hd",
                 "https://zonalive.example/embed/abc"
             ),
             links
@@ -96,17 +201,17 @@ class WitvParserTest {
     @Test
     fun matchesChannelNamesAcrossSites() {
         val channels = listOf(
-            WitvChannel("TF1", "https://witv.online/chaines-live/tf1"),
-            WitvChannel("L'équipe - La Chaine", "https://witv.online/chaines-live/31-lequipe-la-chaine.html"),
-            WitvChannel("beIN SPORT 1", "https://witv.online/chaines-live/bein-sport-1-fr")
+            WitvChannel("TF1", "https://witv.channel/chaines-live/tf1"),
+            WitvChannel("L'équipe - La Chaine", "https://witv.channel/chaines-live/31-lequipe-la-chaine.html"),
+            WitvChannel("beIN SPORT 1", "https://witv.channel/chaines-live/bein-sport-1-fr")
         )
-        assertEquals("https://witv.online/chaines-live/tf1", WitvParser.findChannel(channels, "TF1")?.url)
+        assertEquals("https://witv.channel/chaines-live/tf1", WitvParser.findChannel(channels, "TF1")?.url)
         assertEquals(
-            "https://witv.online/chaines-live/31-lequipe-la-chaine.html",
+            "https://witv.channel/chaines-live/31-lequipe-la-chaine.html",
             WitvParser.findChannel(channels, "L'EQUIPE Live TV")?.url
         )
         assertEquals(
-            "https://witv.online/chaines-live/bein-sport-1-fr",
+            "https://witv.channel/chaines-live/bein-sport-1-fr",
             WitvParser.findChannel(channels, "beIN SPORT 1")?.url
         )
         assertEquals(null, WitvParser.findChannel(channels, "M6"))
@@ -114,20 +219,20 @@ class WitvParserTest {
 
     @Test
     fun findsAChannelByItsPageUrl() {
-        val channels = listOf(WitvChannel("TF1", "https://witv.online/chaines-live/tf1"))
+        val channels = listOf(WitvChannel("TF1", "https://witv.channel/chaines-live/tf1"))
         assertEquals(channels.first(), WitvParser.findChannelByUrl(channels, "https://witv.team/chaines-live/tf1"))
-        assertEquals(null, WitvParser.findChannelByUrl(channels, "https://witv.online/chaines-live/m6"))
+        assertEquals(null, WitvParser.findChannelByUrl(channels, "https://witv.channel/chaines-live/m6"))
     }
 
     @Test
     fun cleansChannelPageTitles() {
         assertEquals(
             "TF1",
-            WitvParser.pageTitle(Jsoup.parse("<h1>TF1 - Live Tv Streaming</h1>", "https://witv.online/chaines-live/tf1"))
+            WitvParser.pageTitle(Jsoup.parse("<h1>TF1 - Live Tv Streaming</h1>", "https://witv.channel/chaines-live/tf1"))
         )
         assertEquals(
             "M6",
-            WitvParser.pageTitle(Jsoup.parse("<title>M6 – Live Tv Streaming</title>", "https://witv.online/chaines-live/m6"))
+            WitvParser.pageTitle(Jsoup.parse("<title>M6 – Live Tv Streaming</title>", "https://witv.channel/chaines-live/m6"))
         )
     }
 

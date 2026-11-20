@@ -4,6 +4,10 @@ import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import java.net.URI
 import java.text.Normalizer
+import java.util.Calendar
+import java.util.Locale
+import java.util.TimeZone
+import kotlin.math.abs
 
 internal enum class BzhEventDay { TODAY, TOMORROW, LATER }
 
@@ -16,7 +20,9 @@ internal data class BzhEvent(
     val url: String,
     val sport: String,
     val isLive: Boolean,
-    val position: Int
+    val position: Int,
+    val utcMinutes: Int? = null,
+    val dateSortKey: Int? = null
 )
 
 internal data class BzhChannel(val name: String, val url: String)
@@ -64,7 +70,7 @@ internal object BzhSportParser {
         listOf("judo") to "judo",
         listOf("taekwondo", "karate", "kick-boxing", "lutte") to "combat",
         listOf("starligue", "ehf", "handball") to "handball",
-        listOf("atp", "wta", "masters 1000", "roland-garros", "wimbledon", "tennis") to "tennis",
+        listOf("atp", "wta", "masters 1000", "roland-garros", "wimbledon", "tennis", "billie jean") to "tennis",
         listOf("tour de", "cyclisme", "vtt") to "cyclisme",
         listOf("athletisme", "marathon", "100m", "200m") to "athletisme",
         listOf("biathlon") to "biathlon",
@@ -76,17 +82,26 @@ internal object BzhSportParser {
         listOf("squash") to "squash",
         listOf("tennis de table", "wtt") to "pingpong",
         listOf("mlb", "baseball") to "baseball",
+        listOf("snooker", "billard") to "billard",
         listOf("magazine") to "magazine",
         listOf(
             "ligue", "league", "liga", "serie a", "bundesliga", "eredivisie", "premiership",
-            "super lig", "mls", "coupe", "cup", "championship"
+            "super lig", "mls", "coupe", "cup", "championship", "d1 feminin"
         ) to "foot"
     )
     private val categoryRegex = Regex("""/cat/(\d+)\.""")
+    private val timeRegex = Regex("""^(\d{1,2}):(\d{2})$""")
+    private val dateLabelRegex = Regex("""^(\d{1,2})-([a-zA-Zéû]+)-(\d{4})$""")
+    private val monthsByName = mapOf(
+        "jan" to 1, "janv" to 1, "feb" to 2, "fev" to 2, "mar" to 3, "mars" to 3,
+        "apr" to 4, "avr" to 4, "may" to 5, "mai" to 5, "jun" to 6, "juin" to 6,
+        "jul" to 7, "juil" to 7, "aug" to 8, "aou" to 8, "aout" to 8, "sep" to 9, "sept" to 9,
+        "oct" to 10, "nov" to 11, "dec" to 12
+    )
     private val embedRegex = Regex("""embeds\[(\d+)]\s*=\s*'((?:\\'|[^'])*)'""")
     private val titleRegex = Regex("""titles\[(\d+)]\s*=\s*'((?:\\'|[^'])*)'""")
     private val iframeSourceRegex = Regex(
-        """<iframe[^>]*?\ssrc\s*=\s*["']\s*([^"']+?)\s*["']""",
+        """<iframe[^>]*?\s(?:data-)?src\s*=\s*["']\s*([^"']+?)\s*["']""",
         RegexOption.IGNORE_CASE
     )
     private val hlsRegex = Regex(
@@ -132,25 +147,29 @@ internal object BzhSportParser {
         listOf("champions cup", "test match") to 65,
         listOf("conference league") to 60,
         listOf("masters 1000") to 60,
-        listOf("ligue 2") to 55,
+        listOf("ligue 2", "fa cup", "copa del rey", "coppa italia", "dfb pokal", "coupe du portugal") to 55,
         listOf("nfl") to 55,
         listOf("euroleague", "betclic elite") to 50,
         listOf("tour de lombardie", "paris-roubaix", "paris-tours", "milan-san remo", "liege-bastogne") to 50,
         listOf("pro d2", "challenge cup", "pfl") to 40,
         listOf(
             "championship", "eredivisie", "liga portugal", "pro league", "premiership",
-            "super lig", "mls", "saudi pro league", "nhl", "wta", "moto 2", "moto 3", "ligue 3"
+            "super lig", "mls", "saudi pro league", "nhl", "wta", "moto 2", "moto 3", "ligue 3",
+            "d1 feminin"
         ) to 35
     )
     private val bigTeamRegexes = listOf(
-        "psg", "paris saint-germain", "paris sg", "marseille", "real madrid", "fc barcelone", "barcelone",
-        "liverpool", "manchester city", "manchester united", "arsenal", "chelsea", "bayern",
-        "juventus", "inter", "ac milan", "lyon", "monaco", "lens", "lille", "stade toulousain"
+        "psg", "paris saint-germain", "paris sg", "marseille", "om", "real madrid", "fc barcelone",
+        "barcelone", "atletico", "liverpool", "manchester city", "manchester united", "arsenal",
+        "chelsea", "tottenham", "bayern", "dortmund", "juventus", "inter", "ac milan", "napoli",
+        "lyon", "monaco", "lens", "lille", "porto", "benfica", "sporting", "ajax", "stade toulousain"
     ).map { Regex("""\b${Regex.escape(it)}\b""") }
     private val franceRegex = Regex("""\bfrance\b""")
 
+    private const val EVENT_ROW_SELECTOR = "tbody.events tr.event, tbody tr:has(td.event-title)"
+
     fun isSiteDocument(document: Document): Boolean {
-        return document.select("tbody.events tr.event, div.channels a[href], .video-item").isNotEmpty()
+        return document.select("$EVENT_ROW_SELECTOR, div.channels a[href], .video-item").isNotEmpty()
     }
 
     fun isSitePath(url: String): Boolean {
@@ -158,8 +177,8 @@ internal object BzhSportParser {
         return sitePathRegex.matches(path)
     }
 
-    fun events(document: Document): List<BzhEvent> {
-        return document.select("tbody.events tr.event").mapIndexedNotNull { index, row ->
+    fun events(document: Document, displayTimeZone: TimeZone = TimeZone.getDefault()): List<BzhEvent> {
+        return document.select(EVENT_ROW_SELECTOR).mapIndexedNotNull { index, row ->
             val anchor = row.selectFirst("a[href]") ?: return@mapIndexedNotNull null
             val url = anchor.absUrl("href").takeIf(::isHttpUrl) ?: return@mapIndexedNotNull null
             val title = row.selectFirst(".event-title")?.text()?.let(::cleanText)
@@ -170,19 +189,24 @@ internal object BzhSportParser {
             val competition = row.selectFirst("td.hidden-xs")?.text()?.let(::cleanText)
                 ?.takeIf { it.isNotBlank() }
             val status = cells.lastOrNull()?.selectFirst("img")?.attr("src").orEmpty()
+            val rawTime = row.selectFirst("td.dt")?.text()?.trim()?.takeIf { it.isNotBlank() }
+            val utcMinutes = rawTime?.let(::parseUtcMinutes)
+            val localTime = utcMinutes?.let { formatLocalTime(it, displayTimeZone) } ?: rawTime
             BzhEvent(
                 title = title,
                 competition = competition,
                 dayLabel = dayLabel,
                 day = day(dayLabel),
-                time = row.selectFirst("td.dt")?.text()?.trim()?.takeIf { it.isNotBlank() },
+                time = localTime,
                 url = url,
                 sport = sport(
                     cells.firstOrNull()?.selectFirst("img")?.attr("src").orEmpty(),
                     listOfNotNull(competition, title).joinToString(" ")
                 ),
                 isLive = liveStatusRegex.containsMatchIn(status),
-                position = index
+                position = index,
+                utcMinutes = utcMinutes,
+                dateSortKey = parseDateSortKey(dayLabel)
             )
         }.distinctBy { it.url }
     }
@@ -314,10 +338,95 @@ internal object BzhSportParser {
         return score
     }
 
-    fun ranked(events: List<BzhEvent>): List<BzhEvent> {
+    /**
+     * Classement des événements :
+     * 1. Football TOUJOURS en premier (`sport == "foot"`).
+     * 2. Les événements les plus proches de leur heure de début (en direct actif < 2h pour le live,
+     *    ou imminents ≤ 1h pour aujourd'hui, ou jour le plus proche pour les jours à venir) passent
+     *    avant les matchs anciens/terminés ou lointains.
+     * 3. À proximité comparable, les matchs avec le plus d'intérêt (compétition + grosses affiches).
+     * 4. À intérêt égal, le plus proche de l'heure de coup d'envoi.
+     */
+    fun ranked(events: List<BzhEvent>, nowUtcMinutes: Int = currentUtcMinutes()): List<BzhEvent> {
         return events.sortedWith(
-            compareByDescending<BzhEvent> { popularity(it) }.thenBy { it.position }
+            compareByDescending<BzhEvent> { it.sport == "foot" }
+                .thenBy { proximityTier(it, nowUtcMinutes) }
+                .thenBy { if (it.day == BzhEventDay.LATER) it.dateSortKey ?: Int.MAX_VALUE else 0 }
+                .thenByDescending { popularity(it) }
+                .thenBy { closenessToStart(it, nowUtcMinutes) }
+                .thenBy { it.position }
         )
+    }
+
+    /**
+     * Tranche de proximité horaire (0 = le plus proche / réellement en live, 2 = ancien ou lointain).
+     * Les heures brutes de bzzh.lat sont en UTC.
+     */
+    internal fun proximityTier(event: BzhEvent, nowUtcMinutes: Int): Int {
+        val delta = minutesSinceStart(event, nowUtcMinutes)
+        return when {
+            event.isLive -> when {
+                delta == null -> 2
+                delta in -20..120 -> 0   // Vraiment en direct (coup d'envoi < 2h ou imminent)
+                delta in 121..180 -> 1   // En cours depuis 2h-3h (prolongations, tennis, rugby…)
+                else -> 2                // Démarré depuis > 3h : probablement terminé
+            }
+            event.day == BzhEventDay.TODAY -> when {
+                delta == null -> 2
+                delta in -60..120 -> 0   // Commence dans ≤ 1h (ou vient de démarrer)
+                delta in -180..-61 -> 1  // Commence dans 1h à 3h
+                else -> 2                // Plus tard aujourd'hui
+            }
+            event.day == BzhEventDay.TOMORROW -> 0
+            else -> 0
+        }
+    }
+
+    /** Distance au coup d'envoi pour départager deux matchs du même intérêt. */
+    private fun closenessToStart(event: BzhEvent, nowUtcMinutes: Int): Int {
+        val start = event.utcMinutes ?: return Int.MAX_VALUE
+        return if (event.isLive || event.day == BzhEventDay.TODAY) {
+            val delta = minutesSinceStart(event, nowUtcMinutes) ?: return Int.MAX_VALUE
+            abs(delta)
+        } else {
+            start
+        }
+    }
+
+    /** Minutes écoulées depuis le coup d'envoi UTC (> 0 = déjà commencé, < 0 = à venir), avec passage minuit. */
+    internal fun minutesSinceStart(event: BzhEvent, nowUtcMinutes: Int): Int? {
+        val start = event.utcMinutes ?: return null
+        var delta = nowUtcMinutes - start
+        if (delta < -720) delta += 1440
+        if (delta > 720) delta -= 1440
+        return delta
+    }
+
+    internal fun currentUtcMinutes(): Int {
+        val cal = Calendar.getInstance(TimeZone.getTimeZone("UTC"))
+        return cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE)
+    }
+
+    internal fun parseUtcMinutes(raw: String): Int? {
+        val match = timeRegex.matchEntire(raw.trim()) ?: return null
+        val hour = match.groupValues[1].toIntOrNull() ?: return null
+        val minute = match.groupValues[2].toIntOrNull() ?: return null
+        if (hour !in 0..23 || minute !in 0..59) return null
+        return hour * 60 + minute
+    }
+
+    internal fun formatLocalTime(utcMinutes: Int, timeZone: TimeZone = TimeZone.getDefault()): String {
+        val offsetMinutes = timeZone.getOffset(System.currentTimeMillis()) / 60_000
+        val local = ((utcMinutes + offsetMinutes) % 1440 + 1440) % 1440
+        return String.format(Locale.US, "%02d:%02d", local / 60, local % 60)
+    }
+
+    private fun parseDateSortKey(label: String): Int? {
+        val match = dateLabelRegex.matchEntire(normalize(label)) ?: return null
+        val day = match.groupValues[1].toIntOrNull() ?: return null
+        val month = monthsByName[match.groupValues[2].lowercase()] ?: return null
+        val year = match.groupValues[3].toIntOrNull() ?: return null
+        return year * 10_000 + month * 100 + day
     }
 
     private fun day(label: String): BzhEventDay {
@@ -346,7 +455,7 @@ internal object BzhSportParser {
     }
 
     private fun cleanText(value: String): String {
-        return value.replace(' ', ' ').replace(Regex("""\s+"""), " ").trim()
+        return value.replace('\u00A0', ' ').replace(Regex("""\s+"""), " ").trim()
     }
 
     private fun normalize(value: String): String {

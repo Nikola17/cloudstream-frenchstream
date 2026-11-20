@@ -5,6 +5,7 @@ import com.lagradost.cloudstream3.app
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
@@ -12,9 +13,8 @@ import org.jsoup.nodes.Document
 import java.net.URI
 
 /**
- * WITV : source de chaînes live pour French-Stream TV. Le domaine change souvent
- * (witv.online, witv.channel, witv.team, witv.football, witv.space…) : les miroirs connus
- * sont essayés en tête, et le premier qui sert un catalogue valide l'emporte.
+ * WITV : source de chaînes live pour French-Stream TV. Le domaine officiel (`witv.channel`)
+ * est interrogé en priorité, puis les miroirs de secours ; le premier catalogue valide l'emporte.
  */
 internal class WitvClient(private val player: BzhSportClient) {
 
@@ -38,7 +38,7 @@ internal class WitvClient(private val player: BzhSportClient) {
         cachedChannels?.takeIf { System.currentTimeMillis() - it.first < CHANNELS_CACHE_MS }?.let { return it.second }
         val bases = (listOf(baseUrl) + WitvParser.knownBases).distinct()
         for (base in bases) {
-            val all = collectChannels(base, WitvParser.channelsUrl(base))
+            val all = collectChannels(WitvParser.channelsUrl(base))
             if (all.isEmpty()) continue
             baseUrl = base
             cachedChannels = System.currentTimeMillis() to all
@@ -51,7 +51,7 @@ internal class WitvClient(private val player: BzhSportClient) {
     suspend fun categoryChannels(category: String): List<WitvChannel> {
         val bases = (listOf(baseUrl) + WitvParser.knownBases).distinct()
         for (base in bases) {
-            val channels = collectChannels(base, WitvParser.categoryUrl(base, category), paginate = false)
+            val channels = collectChannels(WitvParser.categoryUrl(base, category), paginate = true)
             if (channels.isNotEmpty()) {
                 baseUrl = base
                 return channels
@@ -74,21 +74,34 @@ internal class WitvClient(private val player: BzhSportClient) {
         return WitvParser.pageTitle(document) to WitvParser.pagePoster(document)
     }
 
-    /** Résout les serveurs embarqués dans la page d'une chaîne, jusqu'au flux HLS. */
-    suspend fun streamsForPage(pageUrl: String, label: String): List<BzhStream> {
+    /**
+     * Résout les serveurs embarqués dans la page d'une chaîne jusqu'aux flux HLS ;
+     * [onStream] reçoit chaque flux dès qu'il est trouvé.
+     */
+    suspend fun streamsForPage(
+        pageUrl: String,
+        label: String,
+        onStream: suspend (BzhStream) -> Unit = {}
+    ): List<BzhStream> {
         val document = fetchDocument(pageUrl) ?: return emptyList()
         val links = WitvParser.playerLinks(document).take(MAX_PLAYERS)
         if (links.isEmpty()) return emptyList()
+        val pageReferer = document.baseUri().ifBlank { pageUrl }
         val found = mutableListOf<BzhStream>()
+        val emitMutex = Mutex()
+
         coroutineScope {
-            links.mapIndexed { index, link ->
-                async {
-                    val resolved = runCatching { player.resolveEmbed(link, document.baseUri()) }.getOrNull().orEmpty()
-                        .ifEmpty { listOfNotNull(runCatching { player.browserEmbed(link, document.baseUri()) }.getOrNull()) }
-                    resolved.map { (url, referer) -> BzhStream("$label · Source ${index + 1}", url, referer) }
+            links.forEachIndexed { index, link ->
+                launch {
+                    val resolved = resolveWitvLink(link, pageReferer)
+                        .map { (url, referer) -> BzhStream("$label · Source ${index + 1}", url, referer) }
+                    emitMutex.withLock {
+                        resolved.filter { s -> found.none { it.url == s.url } }.forEach { stream ->
+                            found.add(stream)
+                            onStream(stream)
+                        }
+                    }
                 }
-            }.awaitAll().flatten().forEach { stream ->
-                if (found.none { it.url == stream.url }) found.add(stream)
             }
         }
         return found
@@ -100,16 +113,76 @@ internal class WitvClient(private val player: BzhSportClient) {
         return streamsForPage(channel.url, channel.name)
     }
 
-    private suspend fun collectChannels(base: String, listUrl: String, paginate: Boolean = true): List<WitvChannel> {
-        val first = fetchDocument(listUrl)?.let(WitvParser::channels).orEmpty()
+    /**
+     * Résout un lien lecteur WITV :
+     * - si c'est un lecteur interne `/player/…`, on l'ouvre avec les en-têtes iframe same-origin
+     *   puis on extrait soit le flux HLS direct `_wtPayload`, soit les miroirs (`server-btn` / iframe) ;
+     * - sinon on délègue directement au résolveur d'embeds + WebView en dernier recours.
+     */
+    private suspend fun resolveWitvLink(link: String, pageReferer: String): List<Pair<String, String>> {
+        if (link.contains(".m3u8", ignoreCase = true)) {
+            return if (link.contains("vc=notice", ignoreCase = true)) emptyList() else listOf(link to pageReferer)
+        }
+
+        if (isSiteUrl(link) && link.contains("/player/", ignoreCase = true)) {
+            val fetched = withTimeoutOrNull(REQUEST_TIMEOUT_MS) {
+                runCatching {
+                    val response = app.get(
+                        link,
+                        headers = browserHeaders + mapOf(
+                            "Referer" to pageReferer,
+                            "Sec-Fetch-Dest" to "iframe",
+                            "Sec-Fetch-Mode" to "navigate",
+                            "Sec-Fetch-Site" to "same-origin"
+                        ),
+                        timeout = REQUEST_TIMEOUT
+                    )
+                    if (!response.isSuccessful) null else response.text to response.url.ifBlank { link }
+                }.getOrNull()
+            }
+            if (fetched != null) {
+                val (html, finalUrl) = fetched
+                val extracted = WitvParser.extractPlayerStreams(html, finalUrl)
+                if (extracted.directHls.isNotEmpty()) {
+                    return extracted.directHls.map { it to finalUrl }
+                }
+                if (extracted.embedUrls.isNotEmpty()) {
+                    val mirrorStreams = coroutineScope {
+                        extracted.embedUrls.take(MAX_MIRRORS_PER_SOURCE).map { embedUrl ->
+                            async {
+                                runCatching { player.resolveEmbed(embedUrl, finalUrl) }.getOrNull().orEmpty()
+                            }
+                        }.awaitAll().flatten()
+                    }
+                    if (mirrorStreams.isNotEmpty()) return mirrorStreams
+                    // Secours WebView sur le premier miroir si aucun m3u8 n'était lisible en HTML statique.
+                    val browser = runCatching {
+                        player.browserEmbed(extracted.embedUrls.first(), finalUrl)
+                    }.getOrNull()
+                    if (browser != null) return listOf(browser)
+                }
+            }
+        }
+
+        return runCatching { player.resolveEmbed(link, pageReferer) }.getOrNull().orEmpty()
+            .ifEmpty { listOfNotNull(runCatching { player.browserEmbed(link, pageReferer) }.getOrNull()) }
+    }
+
+    private suspend fun collectChannels(listUrl: String, paginate: Boolean = true): List<WitvChannel> {
+        var currentDoc = fetchDocument(listUrl) ?: return emptyList()
+        val first = WitvParser.channels(currentDoc)
         if (first.isEmpty()) return emptyList()
         if (!paginate) return first
+
         val all = mutableListOf<WitvChannel>().apply { addAll(first) }
         for (page in 2..MAX_PAGES) {
-            val next = fetchDocument("$listUrl?page=$page") ?: break
-            val added = WitvParser.channels(next).filter { c -> all.none { it.url == c.url } }
+            val nextUrl = WitvParser.nextPageUrl(currentDoc, listUrl, page)
+                ?: if (listUrl.contains("witv.online", ignoreCase = true)) "$listUrl?page=$page" else break
+            val nextDoc = fetchDocument(nextUrl) ?: break
+            val added = WitvParser.channels(nextDoc).filter { c -> all.none { it.url == c.url } }
             if (added.isEmpty()) break
             all += added
+            currentDoc = nextDoc
         }
         return all
     }
@@ -132,6 +205,7 @@ internal class WitvClient(private val player: BzhSportClient) {
         const val REQUEST_TIMEOUT_MS = 9_000L
         const val CHANNELS_CACHE_MS = 5 * 60 * 1000L
         const val MAX_PAGES = 5
-        const val MAX_PLAYERS = 6
+        const val MAX_PLAYERS = 4
+        const val MAX_MIRRORS_PER_SOURCE = 4
     }
 }
