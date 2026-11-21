@@ -1,10 +1,10 @@
 [
     {
         "iconUrl": "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/main/assets/icons/frenchmanga.png",
-        "fileHash": "sha256-8bae74c0a9d28fb62bac2c04ed4d7161c13893d88b92e27ae1dd87295cf54aa0",
+        "fileHash": "sha256-73c4a8b9520fcbab8e27bbefbb7764f80d4d2d9b3849577a3ad879da468832af",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Nikola17/cloudstream-frenchstream",
-        "fileSize": 71381,
+        "fileSize": 72725,
         "status": 1,
         "language": "fr",
         "authors": [
@@ -14,10 +14,10 @@
             "Anime",
             "AnimeMovie"
         ],
-        "version": 5,
+        "version": 6,
         "internalName": "FrenchManga",
         "description": "Animes et films d'animation VF/VOSTFR en HD via French-Manga",
-        "url": "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/builds/FrenchManga.cs3?v=5",
+        "url": "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/builds/FrenchManga.cs3?v=6",
         "name": "FrenchManga"
     },
     {
