@@ -1,65 +1,84 @@
 [
     {
-        "fileHash": "sha256-f82e91798651a0ca92ec8df6c553b304febacd96e9a5931e69d0408945da6427",
+        "iconUrl": "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/main/assets/icons/frenchmanga.png",
+        "fileHash": "sha256-876165a0f0ddb2dd388e9aa4565ccf102ec4db5de56b8b280547014372bb6435",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Nikola17/cloudstream-frenchstream",
-        "fileSize": 52651,
-        "status": 3,
+        "fileSize": 60837,
+        "status": 1,
         "language": "fr",
         "authors": [
             "Nico"
         ],
-        "version": 3,
+        "tvTypes": [
+            "Anime",
+            "AnimeMovie"
+        ],
+        "version": 4,
         "internalName": "FrenchManga",
-        "description": "Animes et films d'animation de French-Manga",
+        "description": "Animes et films d'animation VF/VOSTFR en HD via French-Manga",
         "url": "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/builds/FrenchManga.cs3",
         "name": "FrenchManga"
     },
     {
-        "fileHash": "sha256-27ba2700a99357392f01de0441761eb069fab760d4b88d35991feb867fb4acde",
+        "iconUrl": "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/main/assets/icons/frenchstream.png",
+        "fileHash": "sha256-4837528ec0823097a3bb1a9f0781c00a5043ef9e729d7aa52c92598d2e53aee0",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Nikola17/cloudstream-frenchstream",
-        "fileSize": 81422,
-        "status": 3,
+        "fileSize": 84338,
+        "status": 1,
         "language": "fr",
         "authors": [
             "Nico"
         ],
-        "version": 20,
+        "tvTypes": [
+            "Movie",
+            "TvSeries"
+        ],
+        "version": 21,
         "internalName": "FrenchStreamProvider",
-        "description": "French-Stream provider for CloudStream",
+        "description": "Films et s\u00e9ries VF/VOSTFR en HD via French-Stream (enrichi TMDB, sans CAM)",
         "url": "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/builds/FrenchStreamProvider.cs3",
         "name": "FrenchStreamProvider"
     },
     {
-        "fileHash": "sha256-5b4b078bfbd5728c22bc50ae3800d0f7c19f95baa85cac094356f68255639600",
+        "iconUrl": "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/main/assets/icons/fstv.png",
+        "fileHash": "sha256-1ce0a66c85a1e62d4d133cd1cb008cf879b3762918f60a8deb08f0f397dd4787",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Nikola17/cloudstream-frenchstream",
-        "fileSize": 95951,
-        "status": 3,
+        "fileSize": 96744,
+        "status": 1,
         "language": "fr",
         "authors": [
             "Nico"
         ],
-        "version": 12,
+        "tvTypes": [
+            "Live"
+        ],
+        "version": 13,
         "internalName": "FSTV",
-        "description": "Cha\u00eenes TV en direct via WITV, matchs et \u00e9v\u00e9nements sport via BZH-Sport (bzzh.lat)",
+        "description": "Cha\u00eenes TV HD en direct via WITV (182 cha\u00eenes) et matchs sport en direct via BZH-Sport",
         "url": "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/builds/FSTV.cs3",
         "name": "FSTV"
     },
     {
-        "fileHash": "sha256-8048553cccefbb69b398ced93ba08250f27d86660101584dd358aba6ac89b3db",
+        "iconUrl": "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/main/assets/icons/movix.png",
+        "fileHash": "sha256-f8eaf4796e4b918600c8d67298872de45563de623ed592cc02eaa3ac8371412f",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Nikola17/cloudstream-frenchstream",
-        "fileSize": 59456,
-        "status": 3,
+        "fileSize": 77386,
+        "status": 1,
         "language": "fr",
         "authors": [
             "Nico"
         ],
-        "version": 8,
+        "tvTypes": [
+            "Movie",
+            "TvSeries"
+        ],
+        "version": 9,
         "internalName": "Movix",
-        "description": "Movix provider for CloudStream",
+        "description": "Films et s\u00e9ries VF/VOSTFR via Movix & TMDB (plateformes, FStream, Wiflix)",
         "url": "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/builds/Movix.cs3",
         "name": "Movix"
     }
