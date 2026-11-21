@@ -17,6 +17,9 @@ class FrenchMangaParserTest {
         assertEquals(core, FrenchMangaParser.categories.take(core.size).map { it.label })
         assertTrue(FrenchMangaParser.categories.any { it.label == "Films d'animation" })
         assertTrue(FrenchMangaParser.categories.any { it.label == "Animes en cours" })
+        assertTrue(FrenchMangaParser.categories.any { it.path == "/mangas-vf/" && it.label == "Animes VF" })
+        assertTrue(FrenchMangaParser.categories.any { it.path == "/mangas-vostfr/" && it.label == "Animes VOSTFR" })
+        assertFalse(FrenchMangaParser.categories.any { it.path.contains("VF+VOSTFR") })
         assertEquals(
             listOf(
                 "/manga-streaming-1/",

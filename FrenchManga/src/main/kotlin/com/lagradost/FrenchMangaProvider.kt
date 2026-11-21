@@ -29,6 +29,7 @@ class FrenchMangaProvider : MainAPI() {
     override var sequentialMainPage = false
 
     private val mirrors = listOf("https://w16.french-manga.net", "https://french-manga.net")
+    private val discoveredMirrors = java.util.concurrent.CopyOnWriteArrayList<String>()
     private val browserHeaders = mapOf("User-Agent" to USER_AGENT)
 
     private data class EpisodeCacheEntry(val items: List<FrenchMangaEpisodeData>, val expiresAt: Long)
@@ -39,7 +40,13 @@ class FrenchMangaProvider : MainAPI() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val document = getSiteDocument(categoryUrl(request.data, page))
+        val url = categoryUrl(request.data, page)
+        val isPrimary = page == 1 && request.data == FrenchMangaParser.categories.first().path
+        val document = if (isPrimary) {
+            getSiteDocument(url)
+        } else {
+            getSiteDocumentOrNull(url) ?: return newHomePageResponse(request, emptyList(), hasNext = false)
+        }
         val rawCards = FrenchMangaParser.cards(document)
         val results = FrenchMangaParser.groupCards(rawCards).map(::toSearchResponse)
         return newHomePageResponse(request, results, hasNext = rawCards.size >= PAGE_SIZE)
@@ -324,15 +331,26 @@ class FrenchMangaProvider : MainAPI() {
         val sourceOrigin = origin(source.url)
         val html = runCatching {
             val first = app.get(source.url, headers = browserHeaders, referer = pageUrl, timeout = 8L)
-            when {
-                first.isSuccessful -> first.text
-                first.code == 403 && sourceOrigin != null -> app.get(
-                    source.url,
-                    headers = browserHeaders,
-                    referer = "$sourceOrigin/",
-                    timeout = 8L
-                ).takeIf { it.isSuccessful }?.text
-                else -> null
+            try {
+                when {
+                    first.isSuccessful -> first.text
+                    first.code == 403 && sourceOrigin != null -> {
+                        val retry = app.get(
+                            source.url,
+                            headers = browserHeaders,
+                            referer = "$sourceOrigin/",
+                            timeout = 8L
+                        )
+                        try {
+                            retry.takeIf { it.isSuccessful }?.text
+                        } finally {
+                            runCatching { retry.okhttpResponse.close() }
+                        }
+                    }
+                    else -> null
+                }
+            } finally {
+                runCatching { first.okhttpResponse.close() }
             }
         }.getOrNull() ?: return false
         val mediaUrls = FrenchMangaPackedPlayerParser.extractMediaUrls(html)
@@ -356,7 +374,7 @@ class FrenchMangaProvider : MainAPI() {
 
     private suspend fun searchDocument(query: String): Document {
         var lastError: Throwable? = null
-        for (base in (listOf(mainUrl) + mirrors).distinct()) {
+        for (base in allBases()) {
             val response = runCatching {
                 app.post(
                     "$base/engine/ajax/search.php",
@@ -366,28 +384,46 @@ class FrenchMangaProvider : MainAPI() {
                     timeout = 10L
                 )
             }.onFailure { lastError = it }.getOrNull() ?: continue
-            if (!response.isSuccessful) continue
-            val document = Jsoup.parse(response.text, "$base/")
-            mainUrl = base
-            return document
+            val (ok, body, resolvedOrigin) = try {
+                if (!response.isSuccessful) Triple(false, "", base)
+                else Triple(true, response.text, origin(response.url) ?: base)
+            } finally {
+                runCatching { response.okhttpResponse.close() }
+            }
+            if (!ok) continue
+            rememberOrigin(resolvedOrigin)
+            return Jsoup.parse(body, "$resolvedOrigin/")
         }
         throw ErrorLoadingException(lastError?.message ?: "Recherche French-Manga indisponible")
     }
 
     private suspend fun getSiteDocument(url: String): Document {
+        return getSiteDocumentOrNull(url)
+            ?: throw ErrorLoadingException("French-Manga est indisponible")
+    }
+
+    private suspend fun getSiteDocumentOrNull(url: String): Document? {
         for ((candidate, base) in mirrorCandidates(url)) {
             val response = runCatching {
                 app.get(candidate, headers = browserHeaders, timeout = 10L)
             }.getOrNull() ?: continue
-            if (!response.isSuccessful) continue
-            val document = response.document
-            document.setBaseUri(candidate)
-            if (document.select("div.short, #manga-data").isNotEmpty()) {
-                mainUrl = base
-                return document
+            val document = try {
+                if (!response.isSuccessful) null
+                else {
+                    val finalUrl = response.url.ifBlank { candidate }
+                    val doc = response.document
+                    doc.setBaseUri(finalUrl)
+                    if (doc.select("div.short, #manga-data").isNotEmpty()) {
+                        rememberOrigin(origin(finalUrl) ?: base)
+                        doc
+                    } else null
+                }
+            } finally {
+                runCatching { response.okhttpResponse.close() }
             }
+            if (document != null) return document
         }
-        throw ErrorLoadingException("French-Manga est indisponible")
+        return null
     }
 
     private suspend fun getSiteText(url: String, referer: String): String {
@@ -400,21 +436,44 @@ class FrenchMangaProvider : MainAPI() {
                     timeout = 10L
                 )
             }.getOrNull() ?: continue
-            if (response.isSuccessful && response.text.isNotBlank()) {
-                mainUrl = base
-                return response.text
+            val (ok, text, resolvedOrigin) = try {
+                if (!response.isSuccessful) Triple(false, "", base)
+                else {
+                    val content = response.text
+                    if (content.isNotBlank()) Triple(true, content, origin(response.url) ?: base)
+                    else Triple(false, "", base)
+                }
+            } finally {
+                runCatching { response.okhttpResponse.close() }
+            }
+            if (ok) {
+                rememberOrigin(resolvedOrigin)
+                return text
             }
         }
         return "{}"
     }
 
+    private fun allBases(): List<String> = (listOf(mainUrl) + discoveredMirrors + mirrors).distinct()
+
+    private fun rememberOrigin(resolvedOrigin: String) {
+        mainUrl = resolvedOrigin
+        if (resolvedOrigin !in mirrors && resolvedOrigin !in discoveredMirrors) {
+            discoveredMirrors.add(0, resolvedOrigin)
+        }
+    }
+
+    private fun isFrenchMangaHost(host: String?): Boolean {
+        val h = host?.lowercase() ?: return false
+        return h == "french-manga.net" || h.endsWith(".french-manga.net")
+    }
+
     private fun mirrorCandidates(url: String): List<Pair<String, String>> {
         val uri = runCatching { URI(url) }.getOrNull() ?: return listOf(url to mainUrl)
         val sourceOrigin = "${uri.scheme}://${uri.authority}"
-        val knownHosts = mirrors.mapNotNull { runCatching { URI(it).host }.getOrNull() }
-        if (uri.host !in knownHosts) return listOf(url to sourceOrigin)
+        if (!isFrenchMangaHost(uri.host)) return listOf(url to sourceOrigin)
         val suffix = uri.rawPath.orEmpty() + uri.rawQuery?.let { "?$it" }.orEmpty()
-        return (listOf(sourceOrigin, mainUrl) + mirrors).distinct().map { "$it$suffix" to it }
+        return (listOf(sourceOrigin) + allBases()).distinct().map { "$it$suffix" to it }
     }
 
     private fun categoryUrl(path: String, page: Int): String {
