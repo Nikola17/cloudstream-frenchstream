@@ -59,6 +59,19 @@ internal object FrenchStreamQuality {
             )
     }
 
+    /**
+     * Paliers stricts de langue : VF/VFF (0) -> VFQ (1) -> VOSTFR/autres (2).
+     * Garantit que CloudStream joue toujours la VF en priorité dès qu'au moins un flux VF valide existe,
+     * sans qu'un flux VOSTFR de résolution supérieure ne prenne la place de la VF.
+     */
+    fun languageTier(language: String?): Int {
+        return when (language?.uppercase()) {
+            "VF", "VFF" -> 0
+            "VFQ" -> 1
+            else -> 2
+        }
+    }
+
     private fun languagePriority(language: String?): Int {
         return when (language?.uppercase()) {
             "VF", "VFF" -> 0

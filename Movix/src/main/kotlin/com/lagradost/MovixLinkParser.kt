@@ -73,6 +73,33 @@ internal object MovixLinkParser {
         }
     }
 
+    /**
+     * Paliers stricts de langue : VFF/VF (0) -> VFQ & liens par défaut non tagués (1) -> VOSTFR/VO (2).
+     * Garantit que la VF est toujours choisie en priorité si au moins un flux VF valide existe.
+     */
+    fun languageTier(language: String?): Int {
+        return when (language?.uppercase()?.takeIf { it.isNotBlank() }) {
+            "VFF", "VF" -> 0
+            "VFQ", null -> 1
+            else -> 2
+        }
+    }
+
+    fun hostPriority(url: String): Int {
+        val lower = url.lowercase()
+        return when {
+            "uqload." in lower -> 0
+            "luluvdo." in lower || "luluvid" in lower || "lulustream." in lower || "lplaygo." in lower -> 1
+            "voe." in lower -> 2
+            "vidoza." in lower -> 3
+            "vidmoly." in lower -> 4
+            "vidara." in lower || "bysebuho." in lower || "embedorigin." in lower -> 5
+            "dood" in lower || "goodstream." in lower -> 6
+            "fsvid." in lower || "vidzy." in lower -> 80
+            else -> 20
+        }
+    }
+
     private data class RankedLink(val url: String, val qualityLabel: String?, val rank: Int)
 
     private fun entriesFromGroups(

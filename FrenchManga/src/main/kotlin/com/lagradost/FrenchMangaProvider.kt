@@ -110,53 +110,83 @@ class FrenchMangaProvider : MainAPI() {
         val episode = loadEpisodeData(payload.pageUrl, newsId)
             .firstOrNull { it.number == payload.episode } ?: return false
 
-        val resolvedAll = mutableListOf<ResolvedMangaLink>()
-        episode.sources.chunked(SOURCE_BATCH_SIZE).forEach { batch ->
-            resolvedAll += coroutineScope {
-                batch.map { source ->
-                    async {
-                        val collected = mutableListOf<ResolvedMangaLink>()
-                        withTimeoutOrNull(SOURCE_TIMEOUT_MS) {
-                            val directOk = loadSource(source, payload.pageUrl) { link ->
-                                collected += ResolvedMangaLink(source.language, link)
-                            }
-                            if (!directOk) {
-                                runCatching {
-                                    loadExtractor(source.url, payload.pageUrl, subtitleCallback) { link ->
-                                        if (FrenchMangaPackedPlayerParser.isPlayableMediaUrl(link.url)) {
-                                            collected += ResolvedMangaLink(source.language, withLanguage(link, source.language))
+        val tieredSources = episode.sources
+            .groupBy { FrenchMangaPackedPlayerParser.languageTier(it.language) }
+            .toSortedMap()
+
+        for ((_, tierSources) in tieredSources) {
+            val orderedSources = tierSources.sortedBy { FrenchMangaPackedPlayerParser.hostPriority(it.url) }
+            val resolvedAll = mutableListOf<ResolvedMangaLink>()
+            orderedSources.chunked(SOURCE_BATCH_SIZE).forEach { batch ->
+                resolvedAll += coroutineScope {
+                    batch.map { source ->
+                        async {
+                            val collected = mutableListOf<ResolvedMangaLink>()
+                            withTimeoutOrNull(SOURCE_TIMEOUT_MS) {
+                                val directOk = loadSource(source, payload.pageUrl) { link ->
+                                    collected += ResolvedMangaLink(source.language, link)
+                                }
+                                val lowerUrl = source.url.lowercase()
+                                if (!directOk && "fsvid." !in lowerUrl && "vidzy." !in lowerUrl) {
+                                    val extracted = mutableListOf<ExtractorLink>()
+                                    runCatching {
+                                        loadExtractor(source.url, payload.pageUrl, subtitleCallback) { link ->
+                                            if (FrenchMangaPackedPlayerParser.isPlayableMediaUrl(link.url)) {
+                                                extracted += link
+                                            }
                                         }
+                                    }
+                                    for (link in extracted) {
+                                        val verified = FrenchMangaStreamVerifier.verifyLink(link) ?: continue
+                                        collected += ResolvedMangaLink(
+                                            source.language,
+                                            withLanguage(link, source.language, verified.quality)
+                                        )
                                     }
                                 }
                             }
+                            collected
                         }
-                        collected
-                    }
-                }.awaitAll().flatten()
+                    }.awaitAll().flatten()
+                }
+            }
+
+            val sorted = resolvedAll
+                .distinctBy { "${it.language}|${it.link.url}" }
+                .sortedWith(
+                    compareBy<ResolvedMangaLink> { FrenchMangaPackedPlayerParser.languagePriority(it.language) }
+                        .thenByDescending { it.link.quality }
+                        .thenBy { it.link.name }
+                )
+            if (sorted.isNotEmpty()) {
+                sorted.forEach { callback(it.link) }
+                return true
             }
         }
-
-        val sorted = resolvedAll
-            .distinctBy { "${it.language}|${it.link.url}" }
-            .sortedWith(
-                compareBy<ResolvedMangaLink> { FrenchMangaPackedPlayerParser.languagePriority(it.language) }
-                    .thenByDescending { it.link.quality }
-                    .thenBy { it.link.name }
-            )
-        sorted.forEach { callback(it.link) }
-        return sorted.isNotEmpty()
+        return false
     }
 
     @Suppress("DEPRECATION")
-    private fun withLanguage(link: ExtractorLink, language: String): ExtractorLink {
+    private fun withLanguage(
+        link: ExtractorLink,
+        language: String,
+        verifiedQuality: Int = Qualities.Unknown.value
+    ): ExtractorLink {
         val label = language.uppercase()
-        if (link.name.startsWith(label, ignoreCase = true)) return link
+        val finalQuality = maxOf(
+            link.quality.takeIf { it > Qualities.Unknown.value }
+                ?: FrenchMangaPackedPlayerParser.inferQuality(link.url)
+                ?: link.quality,
+            verifiedQuality
+        )
+        val displayName = if (link.name.startsWith(label, ignoreCase = true)) link.name else "$label · ${link.name}"
+        if (displayName == link.name && finalQuality == link.quality) return link
         return ExtractorLink(
             source = name,
-            name = "$label · ${link.name}",
+            name = displayName,
             url = link.url,
             referer = link.referer,
-            quality = link.quality,
+            quality = finalQuality,
             headers = link.headers,
             extractorData = link.extractorData,
             type = link.type,
@@ -306,37 +336,22 @@ class FrenchMangaProvider : MainAPI() {
             }
         }.getOrNull() ?: return false
         val mediaUrls = FrenchMangaPackedPlayerParser.extractMediaUrls(html)
-        mediaUrls.forEach { mediaUrl ->
+        var emitted = false
+        for (mediaUrl in mediaUrls) {
             val streamHeaders = browserHeaders + mapOf("Referer" to source.url) +
                 sourceOrigin?.let { mapOf("Origin" to it) }.orEmpty()
-            val quality = resolveQuality(mediaUrl, streamHeaders)
-            val type = if (mediaUrl.contains(".m3u8", ignoreCase = true)) {
-                ExtractorLinkType.M3U8
-            } else {
-                ExtractorLinkType.VIDEO
-            }
+            val isHls = mediaUrl.contains(".m3u8", ignoreCase = true)
+            val verified = FrenchMangaStreamVerifier.verifyUrl(mediaUrl, streamHeaders, isHls) ?: continue
+            val type = if (isHls) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
             val host = source.host.replaceFirstChar { it.uppercase() }
             callback(newExtractorLink(name, "${source.language} · $host", mediaUrl, type) {
                 referer = source.url
                 headers = streamHeaders
-                this.quality = quality
+                this.quality = verified.quality
             })
+            emitted = true
         }
-        return mediaUrls.isNotEmpty()
-    }
-
-    private suspend fun resolveQuality(url: String, headers: Map<String, String>): Int {
-        val inferred = Regex("""(?:^|[^0-9])(2160|1080|720|480|360)p?(?:[^0-9]|$)""")
-            .find(url)?.groupValues?.getOrNull(1)?.toIntOrNull()
-        if (!url.contains(".m3u8", ignoreCase = true)) return inferred ?: Qualities.Unknown.value
-        val manifestQuality = withTimeoutOrNull(3_500L) {
-            runCatching {
-                FrenchMangaPackedPlayerParser.highestHlsQuality(
-                    app.get(url, headers = headers, timeout = 3L).text
-                )
-            }.getOrNull()
-        }
-        return manifestQuality ?: inferred ?: Qualities.Unknown.value
+        return emitted
     }
 
     private suspend fun searchDocument(query: String): Document {

@@ -193,4 +193,43 @@ class FrenchMangaParserTest {
             FrenchMangaPackedPlayerParser.highestHlsQuality("#EXT-X-STREAM-INF:RESOLUTION=1920x804\nstream.m3u8")
         )
     }
+
+    @Test
+    fun rejectsMalformedOrLoopingHlsAndPrioritizesVf() {
+        val looping = """
+            #EXTM3U
+            #EXT-X-STREAM-INF:BANDWIDTH=1200000,RESOLUTION=1280x720
+            index.m3u8
+        """.trimIndent()
+        val media = """
+            #EXTM3U
+            #EXTINF:6.0,
+            seg-1.ts
+        """.trimIndent()
+        val master = """
+            #EXTM3U
+            #EXT-X-STREAM-INF:BANDWIDTH=500000,RESOLUTION=640x360
+            360.m3u8
+            #EXT-X-STREAM-INF:BANDWIDTH=2800000,RESOLUTION=1920x1080
+            1080.m3u8
+        """.trimIndent()
+
+        assertFalse(FrenchMangaStreamVerifier.isValidMediaPlaylist(looping))
+        assertTrue(FrenchMangaStreamVerifier.isValidMediaPlaylist(media))
+        assertEquals(
+            FrenchMangaHlsCheck.Media(null, "https://cdn.example/seg-1.ts"),
+            FrenchMangaStreamVerifier.inspectHlsManifest(media, "https://cdn.example/index.m3u8")
+        )
+        assertEquals(
+            FrenchMangaHlsCheck.Master(1080, "https://cdn.example/1080.m3u8"),
+            FrenchMangaStreamVerifier.inspectHlsManifest(master, "https://cdn.example/master.m3u8")
+        )
+        assertEquals(0, FrenchMangaPackedPlayerParser.languageTier("VF"))
+        assertEquals(1, FrenchMangaPackedPlayerParser.languageTier("VFQ"))
+        assertEquals(2, FrenchMangaPackedPlayerParser.languageTier("VOSTFR"))
+        assertTrue(
+            FrenchMangaPackedPlayerParser.hostPriority("https://uqload.vc/e/1") <
+                FrenchMangaPackedPlayerParser.hostPriority("https://fsvid.lol/e/1")
+        )
+    }
 }

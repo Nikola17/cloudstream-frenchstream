@@ -47,6 +47,19 @@ jobs:
           cp -r FrenchStreamProvider/build/outputs/* builds/ 2>/dev/null || true
           find . -name "plugins.json" -exec cp {} builds/ \;
           find . -name "*.cs3" -exec cp {} builds/ \;
+          python3 -c '
+          import json
+          p = "builds/plugins.json"
+          with open(p, encoding="utf-8") as f:
+              data = json.load(f)
+          for item in data:
+              url = item.get("url", "")
+              ver = item.get("version")
+              if url and ver is not None and "?v=" not in url:
+                  item["url"] = f"{url}?v={ver}"
+          with open(p, "w", encoding="utf-8") as f:
+              json.dump(data, f, indent=4, ensure_ascii=False)
+          '
           ls -la builds/
 
       - name: Deploy to builds branch

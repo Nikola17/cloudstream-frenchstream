@@ -80,12 +80,10 @@ internal class BzhSportClient {
                     val streams = runCatching { resolve(embed.url, document.baseUri(), 0) }.getOrNull().orEmpty()
                         .ifEmpty { listOfNotNull(runCatching { browserStream(embed.url, document.baseUri()) }.getOrNull()) }
                         .map { (url, referer) -> BzhStream(embed.label, url, referer) }
-                    mutex.withLock {
-                        streams.filter { stream -> found.none { it.url == stream.url } }.forEach { stream ->
-                            found.add(stream)
-                            onStream(stream)
-                        }
+                    val fresh = mutex.withLock {
+                        streams.filter { stream -> found.none { it.url == stream.url } }.also { found.addAll(it) }
                     }
+                    fresh.forEach { stream -> onStream(stream) }
                 }
             }
         }

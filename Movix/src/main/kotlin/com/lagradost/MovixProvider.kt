@@ -545,29 +545,40 @@ class MovixProvider : MainAPI() {
         val type = parts.getOrNull(0) ?: return false
         val id = parts.getOrNull(1)?.toIntOrNull() ?: return false
 
-        val primaryLinks = if (type == "tv") {
+        // On interroge toutes les sources Movix (FStream + Wiflix + Custom) en parallèle afin de ne
+        // jamais rater un flux VF HD disponible sur Wiflix quand FStream n'a que des liens cassés ou VOSTFR.
+        val allEntries = if (type == "tv") {
             val season = parts.getOrNull(2)?.toIntOrNull() ?: return false
             val episode = parts.getOrNull(3)?.toIntOrNull() ?: return false
-            fstreamTvLinks(id, season, episode)
-        } else {
-            fstreamMovieLinks(id)
-        }
-
-        if (loadSourceLinks(primaryLinks, subtitleCallback, callback)) return true
-
-        val fallbackLinks = if (type == "tv") {
-            val season = parts.getOrNull(2)?.toIntOrNull() ?: return false
-            val episode = parts.getOrNull(3)?.toIntOrNull() ?: return false
-            wiflixTvLinks(id, season, episode)
+            coroutineScope {
+                val fstream = async { fstreamTvLinks(id, season, episode) }
+                val wiflix = async { wiflixTvLinks(id, season, episode) }
+                fstream.await() + wiflix.await()
+            }
         } else {
             coroutineScope {
-                val custom = async { customMovieLinks(id) }
+                val fstream = async { fstreamMovieLinks(id) }
                 val wiflix = async { wiflixMovieLinks(id) }
-                custom.await() + wiflix.await()
+                val custom = async { customMovieLinks(id) }
+                fstream.await() + wiflix.await() + custom.await()
             }
         }
 
-        return loadSourceLinks(fallbackLinks, subtitleCallback, callback)
+        val deduplicated = allEntries
+            .sortedWith(
+                compareBy<MovixSourceLink> { MovixLinkParser.languagePriority(it.language) }
+                    .thenBy { MovixLinkParser.hostPriority(it.url) }
+            )
+            .distinctBy { it.url }
+
+        val tiered = deduplicated
+            .groupBy { MovixLinkParser.languageTier(it.language) }
+            .toSortedMap()
+
+        for ((_, tierEntries) in tiered) {
+            if (loadSourceLinks(tierEntries, subtitleCallback, callback)) return true
+        }
+        return false
     }
 
     private data class ResolvedMovixLink(val language: String?, val link: ExtractorLink)
@@ -587,15 +598,23 @@ class MovixProvider : MainAPI() {
                 val meta = byUrl[link]
                 val direct = directMediaLink(link, meta?.language)
                 if (direct != null) {
-                    emit(ResolvedMovixLink(meta?.language, direct))
-                    true
+                    val verified = MovixStreamVerifier.verifyLink(direct)
+                    if (verified != null) {
+                        emit(ResolvedMovixLink(meta?.language, withLanguage(direct, meta?.language, verified.quality)))
+                        true
+                    } else false
                 } else {
-                    var ok = false
-                    loadExtractor(link, "$mainUrl/", subtitleCallback) { extracted ->
-                        if (MovixPackedPlayerParser.isPlayableMediaUrl(extracted.url)) {
-                            ok = true
-                            emit(ResolvedMovixLink(meta?.language, withLanguage(extracted, meta?.language)))
+                    val extracted = mutableListOf<ExtractorLink>()
+                    loadExtractor(link, "$mainUrl/", subtitleCallback) { item ->
+                        if (MovixPackedPlayerParser.isPlayableMediaUrl(item.url)) {
+                            extracted += item
                         }
+                    }
+                    var ok = false
+                    for (item in extracted) {
+                        val verified = MovixStreamVerifier.verifyLink(item) ?: continue
+                        ok = true
+                        emit(ResolvedMovixLink(meta?.language, withLanguage(item, meta?.language, verified.quality)))
                     }
                     ok
                 }
@@ -615,14 +634,15 @@ class MovixProvider : MainAPI() {
     }
 
     @Suppress("DEPRECATION")
-    private fun withLanguage(link: ExtractorLink, language: String?): ExtractorLink {
+    private fun withLanguage(link: ExtractorLink, language: String?, verifiedQuality: Int = Qualities.Unknown.value): ExtractorLink {
         val label = language?.uppercase()?.takeIf { it.isNotBlank() }
-        val detectedQuality = link.quality.takeIf { it > Qualities.Unknown.value }
+        val baseQuality = link.quality.takeIf { it > Qualities.Unknown.value }
             ?: MovixPackedPlayerParser.inferQuality(link.url)
             ?: link.quality
+        val detectedQuality = maxOf(baseQuality, verifiedQuality)
         if (label == null && detectedQuality == link.quality) return link
-        val sourceText = if (label != null) "$label · ${link.source}" else link.source
-        val nameText = if (label != null) "$label · ${link.name}" else link.name
+        val sourceText = if (label != null && !link.source.startsWith("$label ·", ignoreCase = true)) "$label · ${link.source}" else link.source
+        val nameText = if (label != null && !link.name.startsWith("$label ·", ignoreCase = true)) "$label · ${link.name}" else link.name
         return ExtractorLink(
             source = sourceText,
             name = nameText,

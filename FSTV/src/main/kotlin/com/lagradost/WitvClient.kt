@@ -100,12 +100,10 @@ internal class WitvClient(private val player: BzhSportClient) {
                 launch {
                     val resolved = resolveWitvLink(link, pageReferer)
                         .map { (url, referer) -> BzhStream("$label · Source ${index + 1}", url, referer) }
-                    emitMutex.withLock {
-                        resolved.filter { s -> found.none { it.url == s.url } }.forEach { stream ->
-                            found.add(stream)
-                            onStream(stream)
-                        }
+                    val fresh = emitMutex.withLock {
+                        resolved.filter { s -> found.none { it.url == s.url } }.also { found.addAll(it) }
                     }
+                    fresh.forEach { stream -> onStream(stream) }
                 }
             }
         }

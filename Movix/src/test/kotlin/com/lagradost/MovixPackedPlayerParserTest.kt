@@ -85,4 +85,42 @@ class MovixPackedPlayerParserTest {
 
         assertEquals(false, found)
     }
+
+    @Test
+    fun rejectsMalformedOrLoopingHlsAndPrioritizesVfAndReliableHosts() {
+        val looping = """
+            #EXTM3U
+            #EXT-X-STREAM-INF:BANDWIDTH=1200000,RESOLUTION=1280x720
+            index.m3u8
+        """.trimIndent()
+        val media = """
+            #EXTM3U
+            #EXTINF:6.0,
+            seg-0.ts
+        """.trimIndent()
+        val master = """
+            #EXTM3U
+            #EXT-X-STREAM-INF:BANDWIDTH=600000,RESOLUTION=640x360
+            360.m3u8
+            #EXT-X-STREAM-INF:BANDWIDTH=3000000,RESOLUTION=1920x1080
+            1080.m3u8
+        """.trimIndent()
+
+        assertEquals(false, MovixStreamVerifier.isValidMediaPlaylist(looping))
+        assertEquals(true, MovixStreamVerifier.isValidMediaPlaylist(media))
+        assertEquals(
+            MovixHlsCheck.Media(null, "https://cdn.example/hls/seg-0.ts"),
+            MovixStreamVerifier.inspectHlsManifest(media, "https://cdn.example/hls/index.m3u8")
+        )
+        assertEquals(
+            MovixHlsCheck.Master(1080, "https://cdn.example/1080.m3u8"),
+            MovixStreamVerifier.inspectHlsManifest(master, "https://cdn.example/master.m3u8")
+        )
+        assertEquals(0, MovixLinkParser.languageTier("VFF"))
+        assertEquals(0, MovixLinkParser.languageTier("VF"))
+        assertEquals(1, MovixLinkParser.languageTier("VFQ"))
+        assertEquals(1, MovixLinkParser.languageTier(null))
+        assertEquals(2, MovixLinkParser.languageTier("VOSTFR"))
+        assertEquals(true, MovixLinkParser.hostPriority("https://uqload.vc/embed-abc.html") < MovixLinkParser.hostPriority("https://fsvid.lol/embed-abc.html"))
+    }
 }

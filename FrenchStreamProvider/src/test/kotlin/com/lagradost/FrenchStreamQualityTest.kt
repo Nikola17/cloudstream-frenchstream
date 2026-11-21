@@ -60,6 +60,50 @@ class FrenchStreamQualityTest {
         assertEquals(true, FrenchStreamQuality.isPlayableMediaUrl("https://strm7.uqload.is/hls2/movie/master.m3u8"))
     }
 
+    @Test
+    fun rejectsMalformedOrLoopingHlsManifestsAndPicksBestVariant() {
+        val loopingSubPlaylist = """
+            #EXTM3U
+            #EXT-X-VERSION:3
+            #EXT-X-STREAM-INF:BANDWIDTH=1400000,RESOLUTION=1280x720
+            index.m3u8
+        """.trimIndent()
+        val realMediaPlaylist = """
+            #EXTM3U
+            #EXT-X-TARGETDURATION:5
+            #EXTINF:5.0,
+            seg-1.ts
+        """.trimIndent()
+        val multiVariantMaster = """
+            #EXTM3U
+            #EXT-X-STREAM-INF:BANDWIDTH=500000,RESOLUTION=640x360
+            https://cdn.example/360/index.m3u8
+            #EXT-X-STREAM-INF:BANDWIDTH=2500000,RESOLUTION=1920x1080
+            https://cdn.example/1080/index.m3u8
+        """.trimIndent()
+
+        assertEquals(false, FrenchStreamStreamVerifier.isValidMediaPlaylist(loopingSubPlaylist))
+        assertEquals(false, FrenchStreamStreamVerifier.isValidMediaPlaylist("<html><body>404</body></html>"))
+        assertEquals(true, FrenchStreamStreamVerifier.isValidMediaPlaylist(realMediaPlaylist))
+        assertEquals(
+            "https://cdn.example/hls/seg-1.ts",
+            FrenchStreamStreamVerifier.pickFirstSegmentUrl(realMediaPlaylist, "https://cdn.example/hls/index.m3u8")
+        )
+        assertEquals(
+            HlsCheck.Media(720, "https://cdn.example/720/seg-1.ts"),
+            FrenchStreamStreamVerifier.inspectHlsManifest(realMediaPlaylist, "https://cdn.example/720/index.m3u8")
+        )
+        assertEquals(HlsCheck.Invalid, FrenchStreamStreamVerifier.inspectHlsManifest("<html>Error</html>", "https://cdn.example/m.m3u8"))
+        assertEquals(
+            HlsCheck.Master(1080, "https://cdn.example/1080/index.m3u8"),
+            FrenchStreamStreamVerifier.inspectHlsManifest(multiVariantMaster, "https://cdn.example/master.m3u8")
+        )
+        assertEquals(0, FrenchStreamQuality.languageTier("VF"))
+        assertEquals(0, FrenchStreamQuality.languageTier("VFF"))
+        assertEquals(1, FrenchStreamQuality.languageTier("VFQ"))
+        assertEquals(2, FrenchStreamQuality.languageTier("VOSTFR"))
+    }
+
     private suspend fun resolved(language: String, name: String, quality: Int): FrenchStreamResolvedLink {
         return FrenchStreamResolvedLink(
             language,

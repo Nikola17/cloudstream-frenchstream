@@ -3,8 +3,10 @@ package com.lagradost
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeoutOrNull
 import java.text.Normalizer
 import java.util.concurrent.atomic.AtomicBoolean
@@ -111,13 +113,14 @@ class FSTVProvider : MainAPI() {
             withTimeoutOrNull(WITV_TIMEOUT_MS) {
                 runCatching {
                     witv.streamsForPage(linkData.url, label) { stream ->
-                        emitStreams(WITV_SOURCE_NAME, listOf(stream), callback)
-                        found.set(true)
+                        if (emitStreams(WITV_SOURCE_NAME, listOf(stream), callback)) {
+                            found.set(true)
+                        }
                     }
                 }
             }
             if (found.get()) return true
-            // Secours BZH-Sport si aucun flux WITV n'a répondu pour cette chaîne.
+            // Secours BZH-Sport si aucun flux WITV valide n'a répondu pour cette chaîne.
             val bzhFallback = withTimeoutOrNull(BZH_TIMEOUT_MS) {
                 runCatching { bzhSport.channelStreams(label) }.getOrNull()
             }.orEmpty()
@@ -136,14 +139,15 @@ class FSTVProvider : MainAPI() {
         return emitStreams(WITV_SOURCE_NAME, witvStreams, callback)
     }
 
-    /** Matchs et événements BZH-Sport : envoi des flux dès qu'ils sont trouvés. */
+    /** Matchs et événements BZH-Sport : envoi des flux vérifiés dès qu'ils sont trouvés. */
     private suspend fun loadBzhLinks(url: String, callback: (ExtractorLink) -> Unit): Boolean {
         val found = AtomicBoolean(false)
         withTimeoutOrNull(BZH_EVENT_TIMEOUT_MS) {
             runCatching {
                 bzhSport.streams(url) { stream ->
-                    emitStreams(BzhSportClient.SOURCE_NAME, listOf(stream), callback)
-                    found.set(true)
+                    if (emitStreams(BzhSportClient.SOURCE_NAME, listOf(stream), callback)) {
+                        found.set(true)
+                    }
                 }
             }
         }
@@ -194,11 +198,21 @@ class FSTVProvider : MainAPI() {
     }
 
     private suspend fun emitStreams(sourceName: String, streams: List<BzhStream>, callback: (ExtractorLink) -> Unit): Boolean {
-        streams.forEach { stream ->
-            val streamHeaders = browserHeaders + listOfNotNull(
-                "Referer" to stream.referer,
-                origin(stream.referer)?.let { "Origin" to it }
-            )
+        if (streams.isEmpty()) return false
+        val verified = coroutineScope {
+            streams.map { stream ->
+                async {
+                    val streamHeaders = browserHeaders + listOfNotNull(
+                        "Referer" to stream.referer,
+                        origin(stream.referer)?.let { "Origin" to it }
+                    )
+                    val check = FSTVStreamVerifier.verifyHls(stream.url, streamHeaders) ?: return@async null
+                    Triple(stream, streamHeaders, check.quality)
+                }
+            }.awaitAll().filterNotNull()
+        }.sortedByDescending { it.third }
+
+        verified.forEach { (stream, streamHeaders, verifiedQuality) ->
             callback(
                 newExtractorLink(
                     sourceName,
@@ -208,11 +222,11 @@ class FSTVProvider : MainAPI() {
                 ) {
                     referer = stream.referer
                     headers = streamHeaders
-                    quality = Qualities.Unknown.value
+                    quality = verifiedQuality
                 }
             )
         }
-        return streams.isNotEmpty()
+        return verified.isNotEmpty()
     }
 
     private suspend fun eventsFor(section: String): List<BzhEvent> {

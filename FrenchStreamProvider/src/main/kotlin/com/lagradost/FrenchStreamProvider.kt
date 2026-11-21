@@ -274,7 +274,7 @@ class FrenchStreamProvider : MainAPI() {
         val lower = url.lowercase()
         return when {
             "uqload." in lower -> 0
-            "lulustream." in lower -> 1
+            "lulustream." in lower || "lplaygo." in lower || "luluvid" in lower -> 1
             "vidoza." in lower -> 2
             "voe." in lower -> 3
             "goodstream." in lower -> 4
@@ -288,12 +288,17 @@ class FrenchStreamProvider : MainAPI() {
         url: String,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val response = runCatching { app.get(url, referer = mainUrl).text }.getOrNull() ?: return false
+        val response = withTimeoutOrNull(HOST_TIMEOUT_MS) {
+            runCatching { app.get(url, headers = externalHeaders, referer = mainUrl, timeout = HOST_TIMEOUT_S).text }.getOrNull()
+        } ?: return false
         val directUrl = uqloadSourceRegex.find(response)?.groupValues?.getOrNull(1) ?: return false
-        val quality = FrenchStreamQuality.inferQuality(directUrl) ?: Qualities.Unknown.value
-        callback(newExtractorLink("Uqload", "Uqload", directUrl) {
+        val streamHeaders = externalHeaders + mapOf("Referer" to "https://uqload.is/")
+        val isHls = directUrl.contains(".m3u8", ignoreCase = true)
+        val verified = FrenchStreamStreamVerifier.verifyUrl(directUrl, streamHeaders, isHls) ?: return false
+        callback(newExtractorLink("Uqload", "Uqload", directUrl, if (isHls) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO) {
             referer = "https://uqload.is/"
-            this.quality = quality
+            headers = streamHeaders
+            this.quality = verified.quality
         })
         return true
     }
@@ -335,37 +340,27 @@ class FrenchStreamProvider : MainAPI() {
                 PackedHostResult.NOT_FOUND
             }
         }
-        val directUrl = playableUrls.first()
         val sourceName = sourceNameFromUrl(url)
-        val type = if (directUrl.contains(".m3u8", ignoreCase = true)) {
-            ExtractorLinkType.M3U8
-        } else {
-            ExtractorLinkType.VIDEO
-        }
         val streamHeaders = externalHeaders + mapOf("Referer" to url) +
             origin?.let { mapOf("Origin" to it) }.orEmpty()
-        val quality = resolveQuality(directUrl, streamHeaders)
 
-        callback(newExtractorLink(sourceName, sourceName, directUrl, type) {
-            referer = url
-            headers = streamHeaders
-            this.quality = quality
-        })
-        return PackedHostResult.EMITTED
-    }
-
-    private suspend fun resolveQuality(directUrl: String, headers: Map<String, String>): Int {
-        val inferred = FrenchStreamQuality.inferQuality(directUrl)
-        if (!directUrl.contains(".m3u8", ignoreCase = true)) {
-            return inferred ?: Qualities.Unknown.value
+        for (directUrl in playableUrls) {
+            val isHls = directUrl.contains(".m3u8", ignoreCase = true)
+            val verified = FrenchStreamStreamVerifier.verifyUrl(directUrl, streamHeaders, isHls) ?: continue
+            val type = if (isHls) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+            callback(newExtractorLink(sourceName, sourceName, directUrl, type) {
+                referer = url
+                headers = streamHeaders
+                this.quality = verified.quality
+            })
+            return PackedHostResult.EMITTED
         }
-
-        val manifest = withTimeoutOrNull(4_000L) {
-            runCatching { app.get(directUrl, headers = headers).text }.getOrNull()
+        val lower = url.lowercase()
+        return if ("fsvid." in lower || "vidzy." in lower) {
+            PackedHostResult.REJECTED
+        } else {
+            PackedHostResult.NOT_FOUND
         }
-        return manifest?.let(FrenchStreamQuality::highestHlsQuality)
-            ?: inferred
-            ?: Qualities.Unknown.value
     }
 
     private suspend fun loadHostedLink(
@@ -387,16 +382,21 @@ class FrenchStreamProvider : MainAPI() {
 
         val normalized = normalizeExtractorUrl(url)
         for (candidate in listOf(normalized, url).distinct()) {
-            var emitted = false
+            val extracted = mutableListOf<ExtractorLink>()
             withTimeoutOrNull(HOST_TIMEOUT_MS) {
                 runCatching {
                     loadExtractor(candidate, subtitleCallback) { link ->
                         if (FrenchStreamQuality.isPlayableMediaUrl(link.url)) {
-                            emitted = true
-                            emit(link)
+                            extracted += link
                         }
                     }
                 }
+            }
+            var emitted = false
+            for (link in extracted) {
+                val verified = FrenchStreamStreamVerifier.verifyLink(link) ?: continue
+                emitted = true
+                emit(withQuality(link, verified.quality))
             }
             if (emitted) return true
         }
@@ -404,6 +404,23 @@ class FrenchStreamProvider : MainAPI() {
             return loadUqloadDirect(url, emit)
         }
         return false
+    }
+
+    @Suppress("DEPRECATION")
+    private fun withQuality(link: ExtractorLink, verifiedQuality: Int): ExtractorLink {
+        val finalQuality = maxOf(link.quality, verifiedQuality)
+        if (finalQuality == link.quality) return link
+        return ExtractorLink(
+            source = link.source,
+            name = link.name,
+            url = link.url,
+            referer = link.referer,
+            quality = finalQuality,
+            headers = link.headers,
+            extractorData = link.extractorData,
+            type = link.type,
+            audioTracks = link.audioTracks
+        )
     }
 
     @Suppress("DEPRECATION")
@@ -736,26 +753,36 @@ class FrenchStreamProvider : MainAPI() {
 
         if (groupedLinks.values.all { it.isEmpty() }) return false
 
-        val requests = groupedLinks.flatMap { (language, links) ->
-            links.distinct()
-                .sortedBy(::extractorPriority)
-                .map { language to it }
-        }
-        val resolvedLinks = mutableListOf<FrenchStreamResolvedLink>()
-        requests.chunked(8).forEach { batch ->
-            resolvedLinks += coroutineScope {
-                batch.map { (language, link) ->
-                    async {
-                        val resolved = mutableListOf<FrenchStreamResolvedLink>()
-                        loadHostedLink(link, language, subtitleCallback) { item ->
-                            resolved += FrenchStreamResolvedLink(language, item)
+        val tieredRequests = groupedLinks.entries
+            .groupBy { FrenchStreamQuality.languageTier(it.key) }
+            .toSortedMap()
+
+        for ((_, tierGroups) in tieredRequests) {
+            val requests = tierGroups.flatMap { (language, links) ->
+                links.distinct()
+                    .sortedBy(::extractorPriority)
+                    .map { language to it }
+            }
+            if (requests.isEmpty()) continue
+            val resolvedLinks = mutableListOf<FrenchStreamResolvedLink>()
+            requests.chunked(8).forEach { batch ->
+                resolvedLinks += coroutineScope {
+                    batch.map { (language, link) ->
+                        async {
+                            val resolved = mutableListOf<FrenchStreamResolvedLink>()
+                            loadHostedLink(link, language, subtitleCallback) { item ->
+                                resolved += FrenchStreamResolvedLink(language, item)
+                            }
+                            resolved
                         }
-                        resolved
-                    }
-                }.awaitAll().flatten()
+                    }.awaitAll().flatten()
+                }
+            }
+            if (resolvedLinks.isNotEmpty()) {
+                FrenchStreamQuality.bestFirst(resolvedLinks).forEach { callback(it.link) }
+                return true
             }
         }
-        FrenchStreamQuality.bestFirst(resolvedLinks).forEach { callback(it.link) }
-        return resolvedLinks.isNotEmpty()
+        return false
     }
 }

@@ -93,17 +93,21 @@ internal object MovixPackedPlayerParser {
             .mapNotNull { match ->
                 val width = match.groupValues.getOrNull(1)?.toIntOrNull() ?: return@mapNotNull null
                 val height = match.groupValues.getOrNull(2)?.toIntOrNull() ?: return@mapNotNull null
-                when {
-                    width >= 3000 || height >= 1500 -> 2160
-                    height >= 1100 -> 1440
-                    width >= 1600 || height >= 800 -> 1080
-                    width >= 1100 || height >= 600 -> 720
-                    width >= 700 || height >= 400 -> 480
-                    width >= 600 || height >= 300 -> 360
-                    else -> height
-                }
+                normalizeQuality(width, height)
             }
             .maxOrNull()
+    }
+
+    fun normalizeQuality(width: Int, height: Int): Int {
+        return when {
+            width >= 3000 || height >= 1500 -> 2160
+            height >= 1100 -> 1440
+            width >= 1600 || height >= 800 -> 1080
+            width >= 1100 || height >= 600 -> 720
+            width >= 700 || height >= 400 -> 480
+            width >= 600 || height >= 300 -> 360
+            else -> height
+        }
     }
 
     private fun decodeBase64(input: String): ByteArray? {
@@ -205,31 +209,17 @@ internal abstract class MovixPackedPlayerExtractor : ExtractorApi() {
         )
 
         MovixPackedPlayerParser.extractMediaUrls(html).forEach { streamUrl ->
-            val type = if (streamUrl.contains(".m3u8", ignoreCase = true)) {
-                ExtractorLinkType.M3U8
-            } else {
-                ExtractorLinkType.VIDEO
-            }
-            val quality = resolveQuality(streamUrl, streamHeaders)
+            val isHls = streamUrl.contains(".m3u8", ignoreCase = true)
+            val verified = MovixStreamVerifier.verifyUrl(streamUrl, streamHeaders, isHls) ?: return@forEach
+            val type = if (isHls) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
             callback(
                 newExtractorLink(name, name, streamUrl, type) {
                     this.referer = url
                     this.headers = streamHeaders
-                    this.quality = quality
+                    this.quality = verified.quality
                 }
             )
         }
-    }
-
-    private suspend fun resolveQuality(streamUrl: String, headers: Map<String, String>): Int {
-        val inferred = MovixPackedPlayerParser.inferQuality(streamUrl)
-        if (!streamUrl.contains(".m3u8", ignoreCase = true)) return inferred ?: Qualities.Unknown.value
-        val manifest = withTimeoutOrNull(3_500L) {
-            runCatching { app.get(streamUrl, headers = headers, timeout = 3L).text }.getOrNull()
-        }
-        return manifest?.let(MovixPackedPlayerParser::highestHlsQuality)
-            ?: inferred
-            ?: Qualities.Unknown.value
     }
 }
 
