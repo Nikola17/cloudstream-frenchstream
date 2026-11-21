@@ -1,17 +1,20 @@
 import com.android.build.gradle.BaseExtension
 
-version = 3
+version = 4
 
 extensions.configure<BaseExtension>("android") {
     defaultConfig {
-        versionCode = 3
+        versionCode = 4
     }
 }
 
 cloudstream {
     language = "fr"
     authors = listOf("Nico")
-    description = "Animes et films d'animation de French-Manga"
+    status = 1
+    tvTypes = listOf("Anime", "AnimeMovie")
+    description = "Animes et films d'animation VF/VOSTFR en HD via French-Manga"
+    iconUrl = "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/main/assets/icons/frenchmanga.png"
 }
 
 dependencies {

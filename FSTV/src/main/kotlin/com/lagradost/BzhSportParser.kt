@@ -301,7 +301,7 @@ internal object BzhSportParser {
             append(document.select("meta[property^=og:], meta[name^=twitter:]").map { it.attr("content") }.joinToString("\n"))
             append('\n')
             append(document.select(".group_title").text()).append('\n')
-            append(document.body()?.text().orEmpty())
+            append(document.body().text())
         }
         return bareUrlRegex.findAll(text).mapNotNull { origin(it.value) }
             .filterNot(::isIgnoredPortal)

@@ -22,7 +22,7 @@ class FSTVProvider : MainAPI() {
     override val hasQuickSearch = true
     override var lang = "fr"
     override val supportedTypes = setOf(TvType.Live)
-    override var sequentialMainPage = true
+    override var sequentialMainPage = false
     override val hasDownloadSupport = false
 
     private val browserHeaders = mapOf("User-Agent" to USER_AGENT)
@@ -68,8 +68,13 @@ class FSTVProvider : MainAPI() {
 
         val events = runCatching { bzhSport.events() }.getOrNull().orEmpty()
             .filter { event ->
-                normalize(listOfNotNull(event.title, event.competition).joinToString(" "))
-                    .contains(normalizedQuery)
+                val searchable = listOfNotNull(
+                    event.title,
+                    event.competition,
+                    BzhSportParser.sportLabels[event.sport],
+                    event.sport
+                ).joinToString(" ")
+                normalize(searchable).contains(normalizedQuery)
             }
             .let(BzhSportParser::ranked)
             .map(::toEventSearchResponse)

@@ -30,6 +30,7 @@ internal data class BzhStream(
 internal class BzhSportClient {
     private val browserHeaders = mapOf("User-Agent" to USER_AGENT)
     private val homeMutex = Mutex()
+    private val browserMutex = Mutex()
     private val knownHosts = knownBases.mapNotNull(::host).toMutableSet()
 
     @Volatile
@@ -107,13 +108,13 @@ internal class BzhSportClient {
      * opened in the app's browser, with the event page as its origin, and the HLS address it asks for
      * is kept, with the referer it was asked with.
      */
-    private suspend fun browserStream(url: String, referer: String): Pair<String, String>? {
+    private suspend fun browserStream(url: String, referer: String): Pair<String, String>? = browserMutex.withLock {
         val (request, _) = WebViewResolver(Regex("""\.m3u8"""), timeout = BROWSER_TIMEOUT_MS)
             .resolveUsingWebView(url, referer = referer)
-        val found = request ?: return null
+        val found = request ?: return@withLock null
         val streamUrl = found.url.toString()
-        if (streamUrl.contains("vc=notice", ignoreCase = true)) return null
-        return streamUrl to (found.header("referer") ?: url)
+        if (streamUrl.contains("vc=notice", ignoreCase = true)) return@withLock null
+        streamUrl to (found.header("referer") ?: url)
     }
 
     private suspend fun resolve(url: String, referer: String, depth: Int): List<Pair<String, String>> {

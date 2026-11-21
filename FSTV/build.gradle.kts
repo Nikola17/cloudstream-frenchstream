@@ -1,10 +1,10 @@
 import com.android.build.gradle.BaseExtension
 
-version = 12
+version = 13
 
 extensions.configure<BaseExtension>("android") {
     defaultConfig {
-        versionCode = 12
+        versionCode = 13
     }
     testOptions.unitTests.isReturnDefaultValues = true
 }
@@ -12,7 +12,10 @@ extensions.configure<BaseExtension>("android") {
 cloudstream {
     language = "fr"
     authors = listOf("Nico")
-    description = "Chaînes TV en direct via WITV, matchs et événements sport via BZH-Sport (bzzh.lat)"
+    status = 1
+    tvTypes = listOf("Live")
+    description = "Chaînes TV HD en direct via WITV (182 chaînes) et matchs sport en direct via BZH-Sport"
+    iconUrl = "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/main/assets/icons/fstv.png"
 }
 
 dependencies {

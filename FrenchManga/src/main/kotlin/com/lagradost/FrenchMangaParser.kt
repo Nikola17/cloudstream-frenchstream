@@ -81,7 +81,17 @@ internal object FrenchMangaParser {
         FrenchMangaCategory(
             "/xfsearch/manga_genre/Science-Fiction+%26+Fantastique/",
             "Science-Fiction & Fantastique"
-        )
+        ),
+        FrenchMangaCategory("/xfsearch/serie-statut/Film/", "Films d'animation"),
+        FrenchMangaCategory("/xfsearch/serie-statut/En+cours/", "Animes en cours"),
+        FrenchMangaCategory("/xfsearch/serie-statut/Termin%C3%A9/", "Animes terminés"),
+        FrenchMangaCategory("/xfsearch/version-serie/VF+VOSTFR/", "VF + VOSTFR"),
+        FrenchMangaCategory("/xfsearch/manga_genre/Com%C3%A9die/", "Comédie"),
+        FrenchMangaCategory("/xfsearch/manga_genre/Drame/", "Drame"),
+        FrenchMangaCategory("/xfsearch/manga_genre/Romance/", "Romance"),
+        FrenchMangaCategory("/xfsearch/manga_genre/Myst%C3%A8re/", "Mystère"),
+        FrenchMangaCategory("/xfsearch/tagz/sports/", "Sport"),
+        FrenchMangaCategory("/xfsearch/tagz/martial+arts/", "Arts martiaux")
     )
 
     private val seasonRegex = Regex("""\bSaison\s+(\d+)""", RegexOption.IGNORE_CASE)
@@ -172,7 +182,7 @@ internal object FrenchMangaParser {
         val seasonTitle = data.attr("data-title").trim().takeIf { it.isNotBlank() } ?: return null
         val isMovie = document.select(".short-meta.short-qual, .mli-type, .film-quality")
             .text().contains("Film", ignoreCase = true)
-        val poster = data.attr("data-affiche").trim().takeIf(::isHttpUrl)
+        val poster = data.attr("data-affiche").trim().takeIf(::isHttpUrl)?.let(::highQualityImage)
         val backdrop = backdropRegex.find(
             document.selectFirst(".hero-backdrop")?.attr("style").orEmpty()
         )?.groupValues?.getOrNull(1)?.replace("&amp;", "&")?.takeIf(::isHttpUrl)
@@ -290,8 +300,16 @@ internal object FrenchMangaParser {
         }.distinctBy { it.name to it.role }
     }
 
+    private val tmdbSizeRegex = Regex("""(/t/p/)(?:w|h)\d+(/)""", RegexOption.IGNORE_CASE)
+
+    private fun highQualityImage(url: String?): String? {
+        return url?.let { tmdbSizeRegex.replace(it, "$1w780$2") }
+    }
+
     private fun posterUrl(src: String?, lazySrc: String?): String? {
-        return listOf(src, lazySrc).firstOrNull { it != null && isHttpUrl(it) && !it.startsWith("data:") }
+        return listOf(src, lazySrc)
+            .firstOrNull { it != null && isHttpUrl(it) && !it.startsWith("data:") }
+            ?.let(::highQualityImage)
     }
 
     private fun yearFrom(value: String): Int? = yearRegex.findAll(value).lastOrNull()?.value?.toIntOrNull()
@@ -316,10 +334,33 @@ internal object FrenchMangaPackedPlayerParser {
         """https?://[^\s\"'\\<>]+?\.(?:m3u8|mp4)(?:\?[^\s\"'\\<>]*)?""",
         RegexOption.IGNORE_CASE
     )
+    private val fsvidXorSourceRegex = Regex(
+        """var\s+k\s*=\s*\[([0-9,\s]+)]\s*,\s*b\s*=\s*atob\(s\).*?\}\)\(\s*["']([A-Za-z0-9+/_=-]+)["']\s*\)""",
+        setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+    )
+
+    fun isPlayableMediaUrl(url: String): Boolean {
+        val uri = runCatching { URI(url) }.getOrNull() ?: return false
+        val host = uri.host.orEmpty().lowercase()
+        val path = uri.path.orEmpty().lowercase()
+        return host != "fstream.top" && !host.endsWith(".fstream.top") && "/troll/" !in path
+    }
+
+    fun decodeFsvidSource(script: String): String? {
+        val match = fsvidXorSourceRegex.find(script) ?: return null
+        val key = match.groupValues[1].split(',').mapNotNull { it.trim().toIntOrNull() }
+        if (key.isEmpty()) return null
+        val encrypted = decodeBase64(match.groupValues[2]) ?: return null
+        val source = buildString(encrypted.size) {
+            encrypted.forEachIndexed { index, byte ->
+                append(((byte.toInt() and 0xFF) xor key[index % key.size]).toChar())
+            }
+        }.trim()
+        return source.takeIf { it.startsWith("http://") || it.startsWith("https://") }
+    }
 
     fun extractMediaUrls(html: String): List<String> {
         val candidates = buildList {
-            add(html)
             org.jsoup.Jsoup.parse(html).select("script").forEach { script ->
                 val content = script.data().ifBlank { script.html() }
                 runCatching { JsUnpacker(content).takeIf { it.detect() }?.unpack() }
@@ -327,16 +368,69 @@ internal object FrenchMangaPackedPlayerParser {
             }
             runCatching { JsUnpacker(html).takeIf { it.detect() }?.unpack() }
                 .getOrNull()?.let(::add)
+            add(html)
         }
         return candidates.flatMap { content ->
-            mediaRegex.findAll(content.replace("\\/", "/")).map { match ->
+            val decoded = listOfNotNull(decodeFsvidSource(content))
+            val direct = mediaRegex.findAll(content.replace("\\/", "/")).map { match ->
                 match.value.replace("&amp;", "&")
             }.toList()
-        }.distinct()
+            decoded + direct
+        }.distinct().filter(::isPlayableMediaUrl)
     }
 
     fun highestHlsQuality(manifest: String): Int? {
-        return Regex("""RESOLUTION\s*=\s*\d+x(\d+)""", RegexOption.IGNORE_CASE)
-            .findAll(manifest).mapNotNull { it.groupValues.getOrNull(1)?.toIntOrNull() }.maxOrNull()
+        return Regex("""RESOLUTION\s*=\s*(\d+)x(\d+)""", RegexOption.IGNORE_CASE)
+            .findAll(manifest)
+            .mapNotNull { match ->
+                val width = match.groupValues.getOrNull(1)?.toIntOrNull() ?: return@mapNotNull null
+                val height = match.groupValues.getOrNull(2)?.toIntOrNull() ?: return@mapNotNull null
+                when {
+                    width >= 3000 || height >= 1500 -> 2160
+                    height >= 1100 -> 1440
+                    width >= 1600 || height >= 800 -> 1080
+                    width >= 1100 || height >= 600 -> 720
+                    width >= 700 || height >= 400 -> 480
+                    width >= 600 || height >= 300 -> 360
+                    else -> height
+                }
+            }
+            .maxOrNull()
+    }
+
+    fun languagePriority(language: String?): Int {
+        return when (language?.uppercase()) {
+            "VF", "VFF" -> 0
+            "VFQ" -> 1
+            "VOSTFR", "VO" -> 2
+            else -> 3
+        }
+    }
+
+    private fun decodeBase64(input: String): ByteArray? {
+        val clean = input.trim().replace('-', '+').replace('_', '/').filterNot { it.isWhitespace() }
+        if (clean.isEmpty()) return null
+        val out = ByteArray((clean.length * 3) / 4 + 3)
+        var outLen = 0
+        var buffer = 0
+        var bits = 0
+        for (ch in clean) {
+            if (ch == '=') break
+            val value = when (ch) {
+                in 'A'..'Z' -> ch - 'A'
+                in 'a'..'z' -> ch - 'a' + 26
+                in '0'..'9' -> ch - '0' + 52
+                '+' -> 62
+                '/' -> 63
+                else -> return null
+            }
+            buffer = (buffer shl 6) or value
+            bits += 6
+            if (bits >= 8) {
+                bits -= 8
+                out[outLen++] = ((buffer shr bits) and 0xFF).toByte()
+            }
+        }
+        return out.copyOf(outLen)
     }
 }

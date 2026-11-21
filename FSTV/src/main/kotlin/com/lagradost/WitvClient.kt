@@ -11,6 +11,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import org.jsoup.nodes.Document
 import java.net.URI
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * WITV : source de chaînes live pour French-Stream TV. Le domaine officiel (`witv.channel`)
@@ -27,6 +28,7 @@ internal class WitvClient(private val player: BzhSportClient) {
 
     @Volatile
     private var cachedChannels: Pair<Long, List<WitvChannel>>? = null
+    private val categoryCache = ConcurrentHashMap<String, Pair<Long, List<WitvChannel>>>()
 
     fun isSiteUrl(url: String): Boolean {
         val urlHost = host(url) ?: return false
@@ -47,17 +49,20 @@ internal class WitvClient(private val player: BzhSportClient) {
         return cachedChannels?.second.orEmpty()
     }
 
-    /** Chaînes d'une catégorie WITV (sport, cinema, generaliste…). */
+    /** Chaînes d'une catégorie WITV (sport, cinema, generaliste…), mises en cache quelques minutes. */
     suspend fun categoryChannels(category: String): List<WitvChannel> {
+        val now = System.currentTimeMillis()
+        categoryCache[category]?.takeIf { now - it.first < CHANNELS_CACHE_MS }?.let { return it.second }
         val bases = (listOf(baseUrl) + WitvParser.knownBases).distinct()
         for (base in bases) {
             val channels = collectChannels(WitvParser.categoryUrl(base, category), paginate = true)
             if (channels.isNotEmpty()) {
                 baseUrl = base
+                categoryCache[category] = System.currentTimeMillis() to channels
                 return channels
             }
         }
-        return emptyList()
+        return categoryCache[category]?.second.orEmpty()
     }
 
     suspend fun findChannel(url: String): WitvChannel? =

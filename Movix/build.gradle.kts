@@ -1,17 +1,20 @@
 import com.android.build.gradle.BaseExtension
 
-version = 8
+version = 9
 
 extensions.configure<BaseExtension>("android") {
     defaultConfig {
-        versionCode = 8
+        versionCode = 9
     }
 }
 
 cloudstream {
     language = "fr"
     authors = listOf("Nico")
-    description = "Movix provider for CloudStream"
+    status = 1
+    tvTypes = listOf("Movie", "TvSeries")
+    description = "Films et séries VF/VOSTFR via Movix & TMDB (plateformes, FStream, Wiflix)"
+    iconUrl = "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/main/assets/icons/movix.png"
 }
 
 dependencies {

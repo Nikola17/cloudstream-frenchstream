@@ -31,10 +31,11 @@ class FrenchStreamProvider : MainAPI() {
     override var mainUrl = "https://fs26.lol"
     private val mirrors = listOf(
         "https://fs26.lol",
+        "https://fs016.lol",
         "https://fs16.lol",
         "https://french-stream.pink",
-        "https://fstream.info",
-        "https://french-stream.one"
+        "https://french-stream.net",
+        "https://fstream.info"
     )
     private val discoveredMirrors = java.util.concurrent.CopyOnWriteArrayList<String>()
     private var portalCache: Pair<Long, List<String>>? = null
@@ -48,18 +49,14 @@ class FrenchStreamProvider : MainAPI() {
         """sources:.*?["'](https?://[^"']+)["']""",
         RegexOption.DOT_MATCHES_ALL
     )
-    private val directVideoRegex = Regex(
-        """https?://[^"'\\\s<>]+?\.(?:m3u8|mp4)(?:\?[^"'\\\s<>]*)?""",
-        RegexOption.IGNORE_CASE
-    )
-    private val packedScriptRegex = Regex(
-        """eval\(function\(p,a,c,k,e,d\).*?</script>""",
-        RegexOption.DOT_MATCHES_ALL
-    )
-    private val externalHeaders = mapOf("User-Agent" to "Mozilla/5.0")
+    private val externalHeaders = mapOf("User-Agent" to USER_AGENT)
     private companion object {
         const val PORTAL_URL = "https://fstream.info/"
         const val PORTAL_CACHE_MS = 10 * 60 * 1000L
+        const val SITE_TIMEOUT_S = 10L
+        const val HOST_TIMEOUT_S = 8L
+        const val HOST_TIMEOUT_MS = 9_000L
+        const val SEASON_BATCH_SIZE = 4
     }
     private val siteCookies = ConcurrentHashMap<String, String>()
 
@@ -74,11 +71,11 @@ class FrenchStreamProvider : MainAPI() {
         NOT_FOUND
     }
 
-    private suspend fun verifiedGet(url: String) = app.get(url, cookies = siteCookies).let { response ->
+    private suspend fun verifiedGet(url: String) = app.get(url, headers = externalHeaders, cookies = siteCookies, timeout = SITE_TIMEOUT_S).let { response ->
         if (!response.isSuccessful) return@let response
         val cookie = FrenchStreamMetadata.browserVerificationCookie(response.text) ?: return@let response
         siteCookies[cookie.first] = cookie.second
-        app.get(url, cookies = siteCookies)
+        app.get(url, headers = externalHeaders, cookies = siteCookies, timeout = SITE_TIMEOUT_S)
     }
 
     private suspend fun safeGet(url: String) = verifiedGet(url).let { initial ->
@@ -166,6 +163,7 @@ class FrenchStreamProvider : MainAPI() {
         if (poster == null || poster.startsWith("data:")) {
             poster = fixUrlNull(element.selectFirst("img")?.attr("data-src"))
         }
+        poster = FrenchStreamMetadata.highQualityImage(poster)
         val year = element.selectFirst(".date")?.text()?.substringBefore("-")?.trim()?.toIntOrNull()
 
         val isSeries = title.contains("saison", ignoreCase = true)
@@ -311,43 +309,34 @@ class FrenchStreamProvider : MainAPI() {
         }
     }
 
-    private fun extractDirectVideoUrl(html: String): String? {
-        val packedScripts = packedScriptRegex.findAll(html).map { it.value }.toList()
-        for (packed in packedScripts) {
-            val unpacked = runCatching {
-                JsUnpacker(packed).takeIf { it.detect() }?.unpack()
-            }.getOrNull()
-            val script = unpacked ?: continue
-            FrenchStreamPackedPlayer.decodeFsvidSource(script)?.let { return it }
-            directVideoRegex.find(script)?.value?.let { return it }
-        }
-
-        val unpackedPage = runCatching {
-            JsUnpacker(html).takeIf { it.detect() }?.unpack()
-        }.getOrNull()
-        if (unpackedPage != null) {
-            FrenchStreamPackedPlayer.decodeFsvidSource(unpackedPage)?.let { return it }
-            directVideoRegex.find(unpackedPage)?.value?.let { return it }
-        }
-
-        return directVideoRegex.find(html)?.value
-    }
-
     private suspend fun loadDirectPackedHost(
         url: String,
         callback: (ExtractorLink) -> Unit
     ): PackedHostResult {
-        val response = runCatching {
-            app.get(url, headers = externalHeaders, referer = mainUrl).text
-        }.getOrNull() ?: return PackedHostResult.NOT_FOUND
-        val directUrl = extractDirectVideoUrl(response) ?: return PackedHostResult.NOT_FOUND
-        if (!FrenchStreamQuality.isPlayableMediaUrl(directUrl)) {
-            return PackedHostResult.REJECTED
-        }
-        val sourceName = sourceNameFromUrl(url)
         val origin = runCatching { URI(url) }
             .getOrNull()
             ?.let { "${it.scheme}://${it.authority}" }
+        val response = withTimeoutOrNull(HOST_TIMEOUT_MS) {
+            runCatching {
+                val first = app.get(url, headers = externalHeaders, referer = mainUrl, timeout = HOST_TIMEOUT_S)
+                if (first.isSuccessful) first.text
+                else if (first.code == 403 && origin != null) {
+                    app.get(url, headers = externalHeaders, referer = "$origin/", timeout = HOST_TIMEOUT_S)
+                        .takeIf { it.isSuccessful }?.text
+                } else null
+            }.getOrNull()
+        } ?: return PackedHostResult.NOT_FOUND
+
+        val playableUrls = FrenchStreamPackedPlayer.extractPlayableMediaUrls(response)
+        if (playableUrls.isEmpty()) {
+            return if (FrenchStreamPackedPlayer.hasAnyMediaCandidate(response)) {
+                PackedHostResult.REJECTED
+            } else {
+                PackedHostResult.NOT_FOUND
+            }
+        }
+        val directUrl = playableUrls.first()
+        val sourceName = sourceNameFromUrl(url)
         val type = if (directUrl.contains(".m3u8", ignoreCase = true)) {
             ExtractorLinkType.M3U8
         } else {
@@ -399,11 +388,13 @@ class FrenchStreamProvider : MainAPI() {
         val normalized = normalizeExtractorUrl(url)
         for (candidate in listOf(normalized, url).distinct()) {
             var emitted = false
-            runCatching {
-                loadExtractor(candidate, subtitleCallback) { link ->
-                    if (FrenchStreamQuality.isPlayableMediaUrl(link.url)) {
-                        emitted = true
-                        emit(link)
+            withTimeoutOrNull(HOST_TIMEOUT_MS) {
+                runCatching {
+                    loadExtractor(candidate, subtitleCallback) { link ->
+                        if (FrenchStreamQuality.isPlayableMediaUrl(link.url)) {
+                            emitted = true
+                            emit(link)
+                        }
                     }
                 }
             }
@@ -438,11 +429,21 @@ class FrenchStreamProvider : MainAPI() {
         "films" to "Derniers Films",
         "s-tv" to "Dernières Séries",
         "films/top-film" to "Top Films",
+        "films/cultes" to "Notre Sélection",
         "sries-du-moment" to "Séries du moment",
         "s-tv/netflix-series-" to "Nouveautés Netflix",
         "s-tv/series-disney-plus" to "Nouveautés Disney+",
         "s-tv/series-apple-tv" to "Nouveautés Apple TV+",
         "s-tv/serie-amazon-prime-videos" to "Nouveautés Prime Video",
+        "films/animations" to "Films Animation",
+        "films/thrillers" to "Films Thriller",
+        "films/drames" to "Films Drame",
+        "films/policiers" to "Films Policier",
+        "films/guerres" to "Films Guerre",
+        "animation-serie-" to "Séries Animation",
+        "drame-serie-" to "Séries Drame",
+        "thriller-series-" to "Séries Thriller",
+        "aventure-series-" to "Séries Aventure",
         "films/actions" to "Films Action",
         "films/comedies" to "Films Comédie",
         "films/epouvante-horreurs" to "Films Épouvante & Horreur",
@@ -598,7 +599,22 @@ class FrenchStreamProvider : MainAPI() {
         val isSeries = siteTitle.contains("saison", ignoreCase = true)
             || doc.select("div.episodes-wrapper").isNotEmpty()
             || doc.select("#serie-config, #sv-cfg").isNotEmpty()
-        val details = FrenchStreamTmdbClient.details(canonicalTitle, siteYear, isSeries)
+        val (details, siteEpisodes) = coroutineScope {
+            val detailsJob = async { FrenchStreamTmdbClient.details(canonicalTitle, siteYear, isSeries) }
+            val episodesJob = if (isSeries) {
+                async {
+                    val currentSeason = FrenchStreamMetadata.seasonNumber(siteTitle) ?: 1
+                    val refs = discoverSeasonRefs(canonicalTitle, siteTitle, url, currentSeason, doc)
+                    refs.chunked(SEASON_BATCH_SIZE).flatMap { batch ->
+                        coroutineScope {
+                            batch.map { ref -> async { loadSiteEpisodes(ref, url, doc) } }.awaitAll().flatten()
+                        }
+                    }.distinctBy { it.season to it.episode }
+                        .sortedWith(compareBy<SiteEpisode> { it.season }.thenBy { it.episode })
+                }
+            } else null
+            detailsJob.await() to episodesJob?.await().orEmpty()
+        }
         val tmdbTags = details?.optJSONArray("genres")?.let { genres ->
             (0 until genres.length()).mapNotNull { genres.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
         } ?: emptyList()
@@ -638,11 +654,6 @@ class FrenchStreamProvider : MainAPI() {
             }
         }
 
-        val currentSeason = FrenchStreamMetadata.seasonNumber(siteTitle) ?: 1
-        val refs = discoverSeasonRefs(canonicalTitle, siteTitle, url, currentSeason, doc)
-        val siteEpisodes = refs.flatMap { loadSiteEpisodes(it, url, doc) }
-            .distinctBy { it.season to it.episode }
-            .sortedWith(compareBy<SiteEpisode> { it.season }.thenBy { it.episode })
         val tmdbEpisodes = tmdbEpisodes(details, siteEpisodes.map { it.season })
         val episodes = siteEpisodes.map { item ->
             val metadata = tmdbEpisodes[item.season to item.episode]

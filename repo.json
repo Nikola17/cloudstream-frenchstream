@@ -1,6 +1,7 @@
 {
   "name": "CloudStream FR",
-  "description": "Addons CloudStream FR - French-Stream et Movix",
+  "description": "Addons CloudStream FR : French-Stream, Movix, French-Manga et French-Stream TV (Sport & Chaînes Live)",
+  "iconUrl": "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/main/assets/icons/repo.png",
   "manifestVersion": 1,
   "pluginLists": [
     "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/builds/plugins.json"

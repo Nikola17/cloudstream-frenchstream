@@ -26,4 +26,19 @@ class FrenchStreamPackedPlayerTest {
         assertEquals(source, FrenchStreamPackedPlayer.decodeFsvidSource(unpacked))
         assertNull(FrenchStreamPackedPlayer.decodeFsvidSource("var source='https://cdn.example/video.mp4';"))
     }
+
+    @Test
+    fun skipsTrollDecoyToReturnRealVidzyStream() {
+        val html = """
+            <script>
+              var decoy = "https://s1.fsvid.lol/troll/master.m3u8";
+              var sources = [{file: "https://u14.vidzy.org/hls2/06/00014/real_n/master.m3u8?t=abc"}];
+            </script>
+        """.trimIndent()
+
+        assertEquals(
+            listOf("https://u14.vidzy.org/hls2/06/00014/real_n/master.m3u8?t=abc"),
+            FrenchStreamPackedPlayer.extractPlayableMediaUrls(html)
+        )
+    }
 }

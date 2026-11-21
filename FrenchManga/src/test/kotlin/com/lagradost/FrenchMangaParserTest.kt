@@ -9,14 +9,14 @@ import org.junit.Test
 class FrenchMangaParserTest {
     @Test
     fun exposesRequestedCatalogsInHomepageOrder() {
-        assertEquals(
-            listOf(
-                "Récemment mises à jour", "Coups de Cœur", "Shonen", "Seinen", "Dark Fantasy",
-                "Gore", "Isekai", "Thriller",
-                "Aventure", "Action & Aventure", "Science-Fiction & Fantastique"
-            ),
-            FrenchMangaParser.categories.map { it.label }
+        val core = listOf(
+            "Récemment mises à jour", "Coups de Cœur", "Shonen", "Seinen", "Dark Fantasy",
+            "Gore", "Isekai", "Thriller",
+            "Aventure", "Action & Aventure", "Science-Fiction & Fantastique"
         )
+        assertEquals(core, FrenchMangaParser.categories.take(core.size).map { it.label })
+        assertTrue(FrenchMangaParser.categories.any { it.label == "Films d'animation" })
+        assertTrue(FrenchMangaParser.categories.any { it.label == "Animes en cours" })
         assertEquals(
             listOf(
                 "/manga-streaming-1/",
@@ -179,6 +179,7 @@ class FrenchMangaParserTest {
     @Test
     fun extractsPackedPlayerMediaUrls() {
         val html = """
+            <script>var decoy = "https://s1.fsvid.lol/troll/master.m3u8";</script>
             <script>player({sources:[{file:"https://cdn.example/video/master.m3u8"}]});</script>
             <script>var fallback = "https://cdn.example/video.mp4";</script>
         """.trimIndent()
@@ -186,6 +187,10 @@ class FrenchMangaParserTest {
         assertEquals(
             listOf("https://cdn.example/video/master.m3u8", "https://cdn.example/video.mp4"),
             FrenchMangaPackedPlayerParser.extractMediaUrls(html)
+        )
+        assertEquals(
+            1080,
+            FrenchMangaPackedPlayerParser.highestHlsQuality("#EXT-X-STREAM-INF:RESOLUTION=1920x804\nstream.m3u8")
         )
     }
 }

@@ -13,18 +13,21 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URI
 import java.net.URLEncoder
 import java.text.SimpleDateFormat
-import java.util.Locale
 import java.util.Collections
+import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 
 class MovixProvider : MainAPI() {
-    override var mainUrl = "https://movix.date"
+    @Volatile
+    override var mainUrl = "https://movix.tokyo"
     override var name = "Movix"
     override val hasMainPage = true
     override val hasQuickSearch = true
@@ -33,6 +36,7 @@ class MovixProvider : MainAPI() {
 
     private val healthUrl = "https://movix.online"
     private val mirrors = listOf(
+        "https://movix.tokyo",
         "https://movix.miami",
         "https://movix.date",
         "https://movix.show",
@@ -41,60 +45,71 @@ class MovixProvider : MainAPI() {
     private val movixApiBases = listOf("https://api.movix.show", "https://api.movix.miami")
     @Volatile
     private var movixApiUrl = movixApiBases.first()
+    private val healthMutex = Mutex()
+    @Volatile
+    private var healthCheckedAt = 0L
+
     private val tmdbApi = "https://api.themoviedb.org/3"
     private val tmdbKey = "f3d757824f08ea2cff45eb8f47ca3a1e"
     private val imageBase = "https://image.tmdb.org/t/p"
     private val movixHeaders get() = mapOf(
         "Origin" to mainUrl,
         "Referer" to "$mainUrl/",
-        "User-Agent" to "Mozilla/5.0"
+        "User-Agent" to USER_AGENT
     )
+
     private data class QualityCacheEntry(val quality: SearchQuality?, val expiresAt: Long)
     private val qualityCache = ConcurrentHashMap<Int, QualityCacheEntry>()
     private data class TheatersCacheEntry(val inTheaters: Boolean, val expiresAt: Long)
     private val theatersCache = ConcurrentHashMap<Int, TheatersCacheEntry>()
+    private data class TmdbCacheEntry(val json: JSONObject, val expiresAt: Long)
+    private val tmdbCache = ConcurrentHashMap<String, TmdbCacheEntry>()
 
     override val mainPage = mainPageOf(
         "movie/popular" to "Films populaires",
         "movie/trending" to "Films tendance",
-        "movie/top_rated" to "Films les mieux notes",
-        "tv/popular" to "Series populaires",
-        "tv/trending" to "Series tendance",
-        "tv/top_rated" to "Series les mieux notees",
-        "movie/genre/28" to "Films - Action",
-        "movie/genre/12" to "Films - Aventure",
-        "movie/genre/16" to "Films - Animation",
-        "movie/genre/35" to "Films - Comedie",
-        "movie/genre/80" to "Films - Crime",
-        "movie/genre/99" to "Films - Documentaire",
-        "movie/genre/18" to "Films - Drame",
-        "movie/genre/10751" to "Films - Famille",
-        "movie/genre/14" to "Films - Fantastique",
-        "movie/genre/36" to "Films - Histoire",
-        "movie/genre/27" to "Films - Horreur",
-        "movie/genre/10402" to "Films - Musique",
-        "movie/genre/9648" to "Films - Mystere",
-        "movie/genre/10749" to "Films - Romance",
-        "movie/genre/878" to "Films - Science-Fiction",
-        "movie/genre/53" to "Films - Thriller",
-        "movie/genre/10752" to "Films - Guerre",
-        "movie/genre/37" to "Films - Western",
-        "tv/genre/10759" to "Series - Action & Aventure",
-        "tv/genre/16" to "Series - Animation",
-        "tv/genre/35" to "Series - Comedie",
-        "tv/genre/80" to "Series - Crime",
-        "tv/genre/99" to "Series - Documentaire",
-        "tv/genre/18" to "Series - Drame",
-        "tv/genre/10751" to "Series - Famille",
-        "tv/genre/10762" to "Series - Kids",
-        "tv/genre/9648" to "Series - Mystere",
-        "tv/genre/10763" to "Series - News",
-        "tv/genre/10764" to "Series - Reality",
-        "tv/genre/10765" to "Series - Sci-Fi & Fantasy",
-        "tv/genre/10766" to "Series - Soap",
-        "tv/genre/10767" to "Series - Talk",
-        "tv/genre/10768" to "Series - Guerre & Politique",
-        "tv/genre/37" to "Series - Western"
+        "movie/top_rated" to "Films les mieux notés",
+        "tv/popular" to "Séries populaires",
+        "tv/trending" to "Séries tendance",
+        "tv/on_the_air" to "Séries en cours de diffusion",
+        "tv/top_rated" to "Séries les mieux notées",
+        "tv/provider/8" to "Nouveautés Netflix",
+        "tv/provider/337" to "Nouveautés Disney+",
+        "tv/provider/119" to "Nouveautés Prime Video",
+        "tv/provider/350" to "Nouveautés Apple TV+",
+        "tv/anime" to "Animes populaires",
+        "movie/genre/28" to "Films · Action",
+        "movie/genre/12" to "Films · Aventure",
+        "movie/genre/16" to "Films · Animation",
+        "movie/genre/35" to "Films · Comédie",
+        "movie/genre/80" to "Films · Crime",
+        "movie/genre/99" to "Films · Documentaire",
+        "movie/genre/18" to "Films · Drame",
+        "movie/genre/10751" to "Films · Famille",
+        "movie/genre/14" to "Films · Fantastique",
+        "movie/genre/36" to "Films · Histoire",
+        "movie/genre/27" to "Films · Horreur",
+        "movie/genre/10402" to "Films · Musique",
+        "movie/genre/9648" to "Films · Mystère",
+        "movie/genre/10749" to "Films · Romance",
+        "movie/genre/878" to "Films · Science-Fiction",
+        "movie/genre/53" to "Films · Thriller",
+        "movie/genre/10752" to "Films · Guerre",
+        "movie/genre/37" to "Films · Western",
+        "tv/genre/10759" to "Séries · Action & Aventure",
+        "tv/genre/16" to "Séries · Animation",
+        "tv/genre/35" to "Séries · Comédie",
+        "tv/genre/80" to "Séries · Crime",
+        "tv/genre/99" to "Séries · Documentaire",
+        "tv/genre/18" to "Séries · Drame",
+        "tv/genre/10751" to "Séries · Famille",
+        "tv/genre/10762" to "Séries · Jeunesse",
+        "tv/genre/9648" to "Séries · Mystère",
+        "tv/genre/10763" to "Séries · Actualités",
+        "tv/genre/10764" to "Séries · Télé-réalité",
+        "tv/genre/10765" to "Séries · Sci-Fi & Fantastique",
+        "tv/genre/10768" to "Séries · Guerre & Politique",
+        "tv/genre/37" to "Séries · Western"
     )
 
     private fun enc(value: String): String = URLEncoder.encode(value, "UTF-8")
@@ -134,41 +149,40 @@ class MovixProvider : MainAPI() {
         return path.trim('/').split('/').filter { it.isNotBlank() }
     }
 
-    private suspend fun refreshMainUrlFromHealth(): String? {
-        val response = try {
-            app.get(healthUrl)
-        } catch (_: Exception) {
-            return refreshMainUrlFromMirrors()
-        }
-        if (!response.isSuccessful) return refreshMainUrlFromMirrors()
-
-        val discovered = Regex("""(?:https://)?movix\.[a-z0-9.-]+""", RegexOption.IGNORE_CASE)
-            .findAll(response.text)
-            .map { it.value.trimEnd('/', '.', '"', '\'') }
-            .map { if (it.startsWith("http", ignoreCase = true)) it else "https://$it" }
-            .firstOrNull {
-                !it.equals(healthUrl, ignoreCase = true) &&
-                    !it.endsWith(".png", ignoreCase = true)
+    /** Vérification de domaine mise en cache 30 min (évite ~80 appels HTTP inutiles à l'ouverture). */
+    private suspend fun ensureMainUrl(): String {
+        val now = System.currentTimeMillis()
+        if (now - healthCheckedAt < HEALTH_CACHE_MS) return mainUrl
+        return healthMutex.withLock {
+            val freshNow = System.currentTimeMillis()
+            if (freshNow - healthCheckedAt < HEALTH_CACHE_MS) return@withLock mainUrl
+            val response = withTimeoutOrNull(4_000L) {
+                runCatching { app.get(healthUrl, timeout = 4L) }.getOrNull()
             }
+            val discovered = if (response?.isSuccessful == true) {
+                Regex("""(?:https://)?movix\.[a-z0-9.-]+""", RegexOption.IGNORE_CASE)
+                    .findAll(response.text)
+                    .map { it.value.trimEnd('/', '.', '"', '\'') }
+                    .map { if (it.startsWith("http", ignoreCase = true)) it else "https://$it" }
+                    .firstOrNull {
+                        !it.equals(healthUrl, ignoreCase = true) && !it.endsWith(".png", ignoreCase = true)
+                    }
+            } else null
 
-        if (!discovered.isNullOrBlank() && isReachable(discovered)) {
-            mainUrl = discovered
-        } else {
-            return refreshMainUrlFromMirrors()
+            if (!discovered.isNullOrBlank() && isReachable(discovered)) {
+                mainUrl = discovered
+            } else {
+                mirrors.firstOrNull { isReachable(it) }?.let { mainUrl = it }
+            }
+            healthCheckedAt = System.currentTimeMillis()
+            mainUrl
         }
-        return mainUrl
-    }
-
-    private suspend fun refreshMainUrlFromMirrors(): String? {
-        return mirrors.firstOrNull { isReachable(it) }?.also { mainUrl = it }
     }
 
     private suspend fun isReachable(url: String): Boolean {
-        return try {
-            app.get(url).isSuccessful
-        } catch (_: Exception) {
-            false
-        }
+        return withTimeoutOrNull(4_000L) {
+            runCatching { app.get(url, timeout = 4L).isSuccessful }.getOrDefault(false)
+        } ?: false
     }
 
     private fun toSearchResponse(item: JSONObject): SearchResponse? {
@@ -208,25 +222,53 @@ class MovixProvider : MainAPI() {
     }
 
     private suspend fun getTmdb(path: String, page: Int? = null, extra: Map<String, String> = emptyMap()): JSONObject {
-        return JSONObject(app.get(tmdbUrl(path, page, extra)).text)
+        val requestUrl = tmdbUrl(path, page, extra)
+        val now = System.currentTimeMillis()
+        tmdbCache[requestUrl]?.takeIf { it.expiresAt > now }?.let { return it.json }
+        val json = JSONObject(app.get(requestUrl, timeout = 8L).text)
+        if (tmdbCache.size >= MAX_TMDB_CACHE) {
+            tmdbCache.entries.removeIf { it.value.expiresAt <= now }
+            if (tmdbCache.size >= MAX_TMDB_CACHE) tmdbCache.clear()
+        }
+        tmdbCache[requestUrl] = TmdbCacheEntry(json, now + TMDB_CACHE_MS)
+        return json
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        refreshMainUrlFromHealth()
-
         val parts = request.data.split('/')
         val type = parts.getOrNull(0) ?: "movie"
         val section = parts.getOrNull(1) ?: "popular"
-        val genre = parts.getOrNull(2)
+        val param = parts.getOrNull(2)
 
         val json = when (section) {
             "trending" -> getTmdb("trending/$type/week", page)
             "top_rated" -> getTmdb("$type/top_rated", page)
+            "on_the_air" -> getTmdb("tv/on_the_air", page)
+            "anime" -> getTmdb(
+                "discover/tv",
+                page,
+                mapOf(
+                    "with_genres" to "16",
+                    "with_original_language" to "ja",
+                    "sort_by" to "popularity.desc",
+                    "include_adult" to "false"
+                )
+            )
+            "provider" -> getTmdb(
+                "discover/$type",
+                page,
+                mapOf(
+                    "with_watch_providers" to (param ?: ""),
+                    "watch_region" to "FR",
+                    "sort_by" to "popularity.desc",
+                    "include_adult" to "false"
+                )
+            )
             "genre" -> getTmdb(
                 "discover/$type",
                 page,
                 mapOf(
-                    "with_genres" to (genre ?: ""),
+                    "with_genres" to (param ?: ""),
                     "sort_by" to "popularity.desc",
                     "include_adult" to "false",
                     "include_video" to "false"
@@ -235,52 +277,54 @@ class MovixProvider : MainAPI() {
             else -> getTmdb("$type/popular", page)
         }
 
-        val items = json.optJSONArray("results")
+        val rawItems = json.optJSONArray("results")
             ?.toJsonObjects()
             ?.map { if (!it.has("media_type")) it.put("media_type", type) else it }
             ?.mapNotNull { toSearchResponse(it) }
-            ?.let { filterInTheaters(it) }
             ?: emptyList()
-        enrichMovieQualities(items)
+        val filtered = filterInTheaters(rawItems)
+        enrichMovieQualities(filtered)
+        val items = filtered.filterNot { item ->
+            item.type == TvType.Movie && item.quality?.let(MovixMetadata::isCamera) == true
+        }
 
         val totalPages = json.optInt("total_pages", page)
         return newHomePageResponse(
             HomePageList(request.name, items, isHorizontalImages = false),
-            hasNext = page < totalPages && items.isNotEmpty()
+            hasNext = page < totalPages && rawItems.isNotEmpty()
         )
     }
 
-    override suspend fun search(query: String): List<SearchResponse> {
-        if (query.isBlank()) return emptyList()
-        refreshMainUrlFromHealth()
+    override suspend fun search(query: String): List<SearchResponse> = searchInternal(query, enrich = true)
 
+    /** Recherche instantanée : saute les enrichissements lourds pour répondre dès la frappe. */
+    override suspend fun quickSearch(query: String): List<SearchResponse> =
+        searchInternal(query, enrich = false).take(20)
+
+    private suspend fun searchInternal(query: String, enrich: Boolean): List<SearchResponse> {
+        if (query.isBlank()) return emptyList()
         val json = getTmdb(
             "search/multi",
             1,
-            mapOf(
-                "query" to query,
-                "include_adult" to "false"
-            )
+            mapOf("query" to query, "include_adult" to "false")
         )
-        val results = json.optJSONArray("results")
+        val raw = json.optJSONArray("results")
             ?.toJsonObjects()
             ?.mapNotNull { toSearchResponse(it) }
             ?.distinctBy { it.url }
-            ?.let { filterInTheaters(it) }
             ?: emptyList()
+        if (!enrich) return raw
+        val results = filterInTheaters(raw)
         enrichMovieQualities(results)
-        return results
-    }
-
-    override suspend fun quickSearch(query: String): List<SearchResponse> {
-        return search(query)
+        return results.filterNot { item ->
+            item.type == TvType.Movie && item.quality?.let(MovixMetadata::isCamera) == true
+        }
     }
 
     override suspend fun load(url: String): LoadResponse {
         val parts = parseData(url)
         val type = parts.getOrNull(0) ?: "movie"
         val id = parts.getOrNull(1)?.toIntOrNull() ?: throw ErrorLoadingException("URL Movix invalide")
-        refreshMainUrlFromHealth()
 
         return if (type == "tv") {
             loadTv(id)
@@ -306,7 +350,7 @@ class MovixProvider : MainAPI() {
         }.takeIf { it.isNotBlank() }
 
         return newMovieLoadResponse(title, mediaUrl("movie", id), TvType.Movie, mediaUrl("movie", id)) {
-            posterUrl = image(details.optString("poster_path"))
+            posterUrl = image(details.optString("poster_path"), "w780")
             backgroundPosterUrl = image(details.optString("backdrop_path"), "w1280")
             logoUrl = logo(details)
             year = year(details.optString("release_date"))
@@ -335,7 +379,7 @@ class MovixProvider : MainAPI() {
         val genres = details.optJSONArray("genres")?.toJsonObjects()?.mapNotNull {
             it.optString("name").takeIf { tag -> tag.isNotBlank() }
         } ?: emptyList()
-        val poster = image(details.optString("poster_path"))
+        val poster = image(details.optString("poster_path"), "w780")
         val imdbId = details.optJSONObject("external_ids")?.optString("imdb_id")?.takeIf { it.isNotBlank() }
 
         val seasonNumbers = details.optJSONArray("seasons")?.toJsonObjects()
@@ -378,13 +422,13 @@ class MovixProvider : MainAPI() {
                                 val episodeNumber = episodeJson.optInt("episode_number").takeIf { it > 0 }
                                     ?: return@mapNotNull null
                                 newEpisode(episodeData(id, seasonNumber, episodeNumber)) {
-                                    name = episodeJson.optString("name").ifBlank { "Episode $episodeNumber" }
+                                    name = episodeJson.optString("name").ifBlank { "Épisode $episodeNumber" }
                                     season = seasonNumber
                                     episode = episodeNumber
                                     description = episodeJson.optString("overview").takeIf { it.isNotBlank() }
                                     score = Score.from10(episodeJson.optDouble("vote_average").takeIf { it > 0.0 })
                                     runTime = episodeJson.optInt("runtime").takeIf { it > 0 }
-                                    posterUrl = image(episodeJson.optString("still_path")) ?: fallbackPoster
+                                    posterUrl = image(episodeJson.optString("still_path"), "w780") ?: fallbackPoster
                                     date = parseDate(episodeJson.optString("air_date"))
                                 }
                             }
@@ -398,7 +442,7 @@ class MovixProvider : MainAPI() {
 
     private fun actors(details: JSONObject): List<Pair<Actor, String?>> {
         return MovixMetadata.cast(details).take(30).map { cast ->
-            Actor(cast.name, image(cast.profilePath, "w185")) to cast.character
+            Actor(cast.name, image(cast.profilePath, "w342")) to cast.character
         }
     }
 
@@ -424,10 +468,6 @@ class MovixProvider : MainAPI() {
         return runCatching { SimpleDateFormat("yyyy-MM-dd", Locale.US).parse(value)?.time }.getOrNull()
     }
 
-    /**
-     * Retire les films encore au cinéma (sortie récente sans aucune sortie digitale/physique selon
-     * TMDB) : ils ne sont disponibles qu'en version filmée en salle (CAM/TS), illisible.
-     */
     private suspend fun filterInTheaters(items: List<SearchResponse>): List<SearchResponse> {
         val movies = items.filter { it.type == TvType.Movie && it.id != null }
         if (movies.isEmpty()) return items
@@ -435,7 +475,7 @@ class MovixProvider : MainAPI() {
         val recent = movies.filter { (it as? MovieSearchResponse)?.year?.let { y -> y >= currentYear } == true }
         if (recent.isEmpty()) return items
         val inTheaters = Collections.synchronizedSet(HashSet<Int>())
-        withTimeoutOrNull(3_500L) {
+        withTimeoutOrNull(3_000L) {
             for (batch in recent.chunked(8)) {
                 coroutineScope {
                     batch.map { item ->
@@ -474,7 +514,7 @@ class MovixProvider : MainAPI() {
 
     private suspend fun enrichMovieQualities(items: List<SearchResponse>) {
         val movies = items.filter { it.type == TvType.Movie && it.id != null }
-        withTimeoutOrNull(2_500L) {
+        withTimeoutOrNull(2_200L) {
             for (batch in movies.chunked(8)) {
                 coroutineScope {
                     batch.map { item ->
@@ -500,6 +540,7 @@ class MovixProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        ensureMainUrl()
         val parts = parseData(data)
         val type = parts.getOrNull(0) ?: return false
         val id = parts.getOrNull(1)?.toIntOrNull() ?: return false
@@ -512,41 +553,91 @@ class MovixProvider : MainAPI() {
             fstreamMovieLinks(id)
         }
 
-        if (loadExtractorLinks(primaryLinks, subtitleCallback, callback)) return true
+        if (loadSourceLinks(primaryLinks, subtitleCallback, callback)) return true
 
         val fallbackLinks = if (type == "tv") {
             val season = parts.getOrNull(2)?.toIntOrNull() ?: return false
             val episode = parts.getOrNull(3)?.toIntOrNull() ?: return false
             wiflixTvLinks(id, season, episode)
         } else {
-            customMovieLinks(id) + wiflixMovieLinks(id)
+            coroutineScope {
+                val custom = async { customMovieLinks(id) }
+                val wiflix = async { wiflixMovieLinks(id) }
+                custom.await() + wiflix.await()
+            }
         }
 
-        return loadExtractorLinks(fallbackLinks, subtitleCallback, callback)
+        return loadSourceLinks(fallbackLinks, subtitleCallback, callback)
     }
 
-    private suspend fun loadExtractorLinks(
-        links: List<String>,
+    private data class ResolvedMovixLink(val language: String?, val link: ExtractorLink)
+
+    private suspend fun loadSourceLinks(
+        entries: List<MovixSourceLink>,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        return MovixExtractorPipeline.load(
-            links = links,
+        if (entries.isEmpty()) return false
+        val byUrl = entries.associateBy { it.url }
+        val resolved = Collections.synchronizedList(mutableListOf<ResolvedMovixLink>())
+
+        MovixExtractorPipeline.load<ResolvedMovixLink>(
+            links = entries.map { it.url },
             loader = { link, emit ->
-                // L'API Movix renvoie parfois directement le média (mp4 CDN, m3u8) : on l'émet tel quel.
-                val direct = directMediaLink(link)
+                val meta = byUrl[link]
+                val direct = directMediaLink(link, meta?.language)
                 if (direct != null) {
-                    emit(direct)
+                    emit(ResolvedMovixLink(meta?.language, direct))
                     true
                 } else {
-                    loadExtractor(link, subtitleCallback, emit)
+                    var ok = false
+                    loadExtractor(link, "$mainUrl/", subtitleCallback) { extracted ->
+                        if (MovixPackedPlayerParser.isPlayableMediaUrl(extracted.url)) {
+                            ok = true
+                            emit(ResolvedMovixLink(meta?.language, withLanguage(extracted, meta?.language)))
+                        }
+                    }
+                    ok
                 }
             },
-            callback = callback
+            callback = { resolved += it }
+        )
+
+        val sorted = resolved
+            .distinctBy { "${it.language.orEmpty()}|${it.link.url}" }
+            .sortedWith(
+                compareBy<ResolvedMovixLink> { MovixLinkParser.languagePriority(it.language) }
+                    .thenByDescending { it.link.quality }
+                    .thenBy { it.link.source }
+            )
+        sorted.forEach { callback(it.link) }
+        return sorted.isNotEmpty()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun withLanguage(link: ExtractorLink, language: String?): ExtractorLink {
+        val label = language?.uppercase()?.takeIf { it.isNotBlank() }
+        val detectedQuality = link.quality.takeIf { it > Qualities.Unknown.value }
+            ?: MovixPackedPlayerParser.inferQuality(link.url)
+            ?: link.quality
+        if (label == null && detectedQuality == link.quality) return link
+        val sourceText = if (label != null) "$label · ${link.source}" else link.source
+        val nameText = if (label != null) "$label · ${link.name}" else link.name
+        return ExtractorLink(
+            source = sourceText,
+            name = nameText,
+            url = link.url,
+            referer = link.referer,
+            quality = detectedQuality,
+            headers = link.headers,
+            extractorData = link.extractorData,
+            type = link.type,
+            audioTracks = link.audioTracks
         )
     }
 
-    private suspend fun directMediaLink(url: String): ExtractorLink? {
+    private suspend fun directMediaLink(url: String, language: String?): ExtractorLink? {
+        if (!MovixPackedPlayerParser.isPlayableMediaUrl(url)) return null
         val path = runCatching { URI(url).path.orEmpty() }.getOrDefault(url)
         val isM3u8 = path.endsWith(".m3u8", ignoreCase = true) || url.contains(".m3u8?", ignoreCase = true)
         val isMp4 = path.endsWith(".mp4", ignoreCase = true) || url.contains(".mp4?", ignoreCase = true)
@@ -554,26 +645,27 @@ class MovixProvider : MainAPI() {
         val host = runCatching { URI(url).host.orEmpty() }.getOrDefault("Movix")
             .substringBefore('.').replaceFirstChar { it.uppercase() }
         val type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-        val quality = Regex("""(?<!\d)(2160|1440|1080|720|576|540|480|360|240)(?:p)?(?!\d)""", RegexOption.IGNORE_CASE)
-            .findAll(url).mapNotNull { it.groupValues.getOrNull(1)?.toIntOrNull() }.maxOrNull()
-            ?: Qualities.Unknown.value
-        return newExtractorLink("Movix", host, url, type) {
+        val quality = MovixPackedPlayerParser.inferQuality(url) ?: Qualities.Unknown.value
+        val display = if (!language.isNullOrBlank()) "${language.uppercase()} · $host" else host
+        return newExtractorLink("Movix", display, url, type) {
             this.quality = quality
         }
     }
 
-    private suspend fun getMovixApi(path: String, timeoutSeconds: Long = 15L): JSONObject? {
+    private suspend fun getMovixApi(path: String, timeoutSeconds: Long = 10L): JSONObject? {
         val bases = (listOf(movixApiUrl) + movixApiBases).distinct()
         for (base in bases) {
-            val json = runCatching {
-                val response = app.get(
-                    "$base/${path.trimStart('/')}",
-                    headers = movixHeaders,
-                    timeout = timeoutSeconds
-                )
-                if (!response.isSuccessful) return@runCatching null
-                JSONObject(response.text)
-            }.getOrNull()
+            val json = withTimeoutOrNull(timeoutSeconds * 1000L + 1000L) {
+                runCatching {
+                    val response = app.get(
+                        "$base/${path.trimStart('/')}",
+                        headers = movixHeaders,
+                        timeout = timeoutSeconds
+                    )
+                    if (!response.isSuccessful) return@runCatching null
+                    JSONObject(response.text)
+                }.getOrNull()
+            }
             if (json != null) {
                 movixApiUrl = base
                 return json
@@ -582,33 +674,39 @@ class MovixProvider : MainAPI() {
         return null
     }
 
-    private suspend fun fstreamMovieLinks(id: Int): List<String> {
+    private suspend fun fstreamMovieLinks(id: Int): List<MovixSourceLink> {
         return getMovixApi("api/fstream/movie/$id")
-            ?.let(MovixLinkParser::fstreamMovie)
+            ?.let(MovixLinkParser::fstreamMovieEntries)
             ?: emptyList()
     }
 
-    private suspend fun fstreamTvLinks(id: Int, season: Int, episode: Int): List<String> {
+    private suspend fun fstreamTvLinks(id: Int, season: Int, episode: Int): List<MovixSourceLink> {
         return getMovixApi("api/fstream/tv/$id/season/$season")
-            ?.let { MovixLinkParser.fstreamTv(it, episode) }
+            ?.let { MovixLinkParser.fstreamTvEntries(it, episode) }
             ?: emptyList()
     }
 
-    private suspend fun customMovieLinks(id: Int): List<String> {
+    private suspend fun customMovieLinks(id: Int): List<MovixSourceLink> {
         return getMovixApi("api/links/movie/$id")
-            ?.let(MovixLinkParser::customMovie)
+            ?.let(MovixLinkParser::customMovieEntries)
             ?: emptyList()
     }
 
-    private suspend fun wiflixMovieLinks(id: Int): List<String> {
+    private suspend fun wiflixMovieLinks(id: Int): List<MovixSourceLink> {
         return getMovixApi("api/wiflix/movie/$id")
-            ?.let(MovixLinkParser::wiflixMovie)
+            ?.let(MovixLinkParser::wiflixMovieEntries)
             ?: emptyList()
     }
 
-    private suspend fun wiflixTvLinks(id: Int, season: Int, episode: Int): List<String> {
+    private suspend fun wiflixTvLinks(id: Int, season: Int, episode: Int): List<MovixSourceLink> {
         return getMovixApi("api/wiflix/tv/$id/$season")
-            ?.let { MovixLinkParser.wiflixTv(it, episode) }
+            ?.let { MovixLinkParser.wiflixTvEntries(it, episode) }
             ?: emptyList()
+    }
+
+    private companion object {
+        const val HEALTH_CACHE_MS = 30 * 60 * 1000L
+        const val TMDB_CACHE_MS = 15 * 60 * 1000L
+        const val MAX_TMDB_CACHE = 300
     }
 }

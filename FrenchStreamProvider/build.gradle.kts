@@ -1,17 +1,20 @@
 import com.android.build.gradle.BaseExtension
 
-version = 20
+version = 21
 
 extensions.configure<BaseExtension>("android") {
     defaultConfig {
-        versionCode = 20
+        versionCode = 21
     }
 }
 
 cloudstream {
     language = "fr"
     authors = listOf("Nico")
-    description = "French-Stream provider for CloudStream"
+    status = 1
+    tvTypes = listOf("Movie", "TvSeries")
+    description = "Films et séries VF/VOSTFR en HD via French-Stream (enrichi TMDB, sans CAM)"
+    iconUrl = "https://raw.githubusercontent.com/Nikola17/cloudstream-frenchstream/main/assets/icons/frenchstream.png"
 }
 
 dependencies {

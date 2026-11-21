@@ -20,6 +20,35 @@ class MovixPackedPlayerParserTest {
     }
 
     @Test
+    fun extractsDirectVidzyAndFsvidXorWhileFilteringTrollDecoys() {
+        val directHtml = """
+            <script>
+              var troll = "https://s1.fsvid.lol/troll/master.m3u8";
+              var real = "https://u14.vidzy.org/hls2/06/movie/master.m3u8?t=xyz";
+            </script>
+        """.trimIndent()
+        assertEquals(
+            listOf("https://u14.vidzy.org/hls2/06/movie/master.m3u8?t=xyz"),
+            MovixPackedPlayerParser.extractMediaUrls(directHtml)
+        )
+
+        val secretUrl = "https://cdn.example/fsvid/master.m3u8"
+        val key = listOf(120, 42, 199, 17)
+        val encoded = java.util.Base64.getEncoder().encodeToString(
+            secretUrl.mapIndexed { idx, c -> (c.code xor key[idx % key.size]).toByte() }.toByteArray()
+        )
+        val xorScript = """
+            <script>
+              var s = (function(s){var k=[120,42,199,17],b=atob(s),r="";for(var i=0;i<b.length;i++)r+=String.fromCharCode(b.charCodeAt(i)^k[i%4]);return r})("$encoded");
+            </script>
+        """.trimIndent()
+        assertEquals(
+            listOf(secretUrl),
+            MovixPackedPlayerParser.extractMediaUrls(xorScript)
+        )
+    }
+
+    @Test
     fun ignoresMatchedExtractorsThatEmitNoLinksAndContinues() {
         val attempted = mutableListOf<String>()
         val emitted = mutableListOf<String>()

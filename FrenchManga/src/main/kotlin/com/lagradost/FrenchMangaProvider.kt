@@ -16,18 +16,23 @@ import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import java.net.URI
 import java.net.URLEncoder
+import java.util.concurrent.ConcurrentHashMap
 
 class FrenchMangaProvider : MainAPI() {
+    @Volatile
     override var mainUrl = "https://w16.french-manga.net"
     override var name = "French-Manga"
     override val hasMainPage = true
     override val hasQuickSearch = true
     override var lang = "fr"
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie)
-    override var sequentialMainPage = true
+    override var sequentialMainPage = false
 
     private val mirrors = listOf("https://w16.french-manga.net", "https://french-manga.net")
     private val browserHeaders = mapOf("User-Agent" to USER_AGENT)
+
+    private data class EpisodeCacheEntry(val items: List<FrenchMangaEpisodeData>, val expiresAt: Long)
+    private val episodeCache = ConcurrentHashMap<String, EpisodeCacheEntry>()
 
     override val mainPage = FrenchMangaParser.categories.map { category ->
         MainPageData(category.label, category.path)
@@ -53,6 +58,10 @@ class FrenchMangaProvider : MainAPI() {
         val document = getSiteDocument(url)
         val detail = FrenchMangaParser.detail(document)
             ?: throw ErrorLoadingException("Fiche French-Manga introuvable")
+        val related = FrenchMangaParser.groupCards(FrenchMangaParser.cards(document))
+            .filterNot { sameUrl(it.url, document.baseUri()) }
+            .take(15)
+            .map(::toSearchResponse)
 
         if (detail.isMovie) {
             val episode = loadEpisodeData(url, detail.newsId).firstOrNull()
@@ -63,7 +72,7 @@ class FrenchMangaProvider : MainAPI() {
                 TvType.AnimeMovie,
                 FrenchMangaParser.episodePayload(document.baseUri(), episode.number)
             ) {
-                applyMetadata(detail)
+                applyMetadata(detail, related)
             }
         }
 
@@ -82,9 +91,11 @@ class FrenchMangaProvider : MainAPI() {
 
         if (episodes.isEmpty()) throw ErrorLoadingException("Aucun épisode disponible")
         return newTvSeriesLoadResponse(detail.title, document.baseUri(), TvType.Anime, episodes) {
-            applyMetadata(detail)
+            applyMetadata(detail, related)
         }
     }
+
+    private data class ResolvedMangaLink(val language: String, val link: ExtractorLink)
 
     override suspend fun loadLinks(
         data: String,
@@ -99,20 +110,58 @@ class FrenchMangaProvider : MainAPI() {
         val episode = loadEpisodeData(payload.pageUrl, newsId)
             .firstOrNull { it.number == payload.episode } ?: return false
 
-        var emitted = false
-        episode.sources.forEach { source ->
-            if (loadSource(source, payload.pageUrl, callback)) {
-                emitted = true
-            } else {
-                runCatching {
-                    loadExtractor(source.url, payload.pageUrl, subtitleCallback) { link ->
-                        emitted = true
-                        callback(link)
+        val resolvedAll = mutableListOf<ResolvedMangaLink>()
+        episode.sources.chunked(SOURCE_BATCH_SIZE).forEach { batch ->
+            resolvedAll += coroutineScope {
+                batch.map { source ->
+                    async {
+                        val collected = mutableListOf<ResolvedMangaLink>()
+                        withTimeoutOrNull(SOURCE_TIMEOUT_MS) {
+                            val directOk = loadSource(source, payload.pageUrl) { link ->
+                                collected += ResolvedMangaLink(source.language, link)
+                            }
+                            if (!directOk) {
+                                runCatching {
+                                    loadExtractor(source.url, payload.pageUrl, subtitleCallback) { link ->
+                                        if (FrenchMangaPackedPlayerParser.isPlayableMediaUrl(link.url)) {
+                                            collected += ResolvedMangaLink(source.language, withLanguage(link, source.language))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        collected
                     }
-                }
+                }.awaitAll().flatten()
             }
         }
-        return emitted
+
+        val sorted = resolvedAll
+            .distinctBy { "${it.language}|${it.link.url}" }
+            .sortedWith(
+                compareBy<ResolvedMangaLink> { FrenchMangaPackedPlayerParser.languagePriority(it.language) }
+                    .thenByDescending { it.link.quality }
+                    .thenBy { it.link.name }
+            )
+        sorted.forEach { callback(it.link) }
+        return sorted.isNotEmpty()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun withLanguage(link: ExtractorLink, language: String): ExtractorLink {
+        val label = language.uppercase()
+        if (link.name.startsWith(label, ignoreCase = true)) return link
+        return ExtractorLink(
+            source = name,
+            name = "$label · ${link.name}",
+            url = link.url,
+            referer = link.referer,
+            quality = link.quality,
+            headers = link.headers,
+            extractorData = link.extractorData,
+            type = link.type,
+            audioTracks = link.audioTracks
+        )
     }
 
     private fun toSearchResponse(card: FrenchMangaCard): SearchResponse {
@@ -129,12 +178,16 @@ class FrenchMangaProvider : MainAPI() {
         }
     }
 
-    private suspend fun LoadResponse.applyMetadata(detail: FrenchMangaDetail) {
+    private suspend fun LoadResponse.applyMetadata(
+        detail: FrenchMangaDetail,
+        related: List<SearchResponse>
+    ) {
         posterUrl = detail.posterUrl
         backgroundPosterUrl = detail.backdropUrl
         plot = detail.plot
         year = detail.year
         tags = (detail.genres + detail.tags).distinct()
+        if (related.isNotEmpty()) recommendations = related
         addActors(detail.actors.map { actor -> Actor(actor.name, actor.imageUrl) to actor.role })
         addTrailer(detail.trailerId?.let { "https://www.youtube.com/watch?v=$it" })
     }
@@ -222,8 +275,15 @@ class FrenchMangaProvider : MainAPI() {
     }
 
     private suspend fun loadEpisodeData(pageUrl: String, newsId: String): List<FrenchMangaEpisodeData> {
+        val now = System.currentTimeMillis()
+        episodeCache[newsId]?.takeIf { it.expiresAt > now }?.let { return it.items }
         val apiUrl = "$mainUrl/engine/ajax/manga_episodes_api.php?id=${encode(newsId)}"
-        return FrenchMangaParser.episodes(getSiteText(apiUrl, pageUrl))
+        val items = FrenchMangaParser.episodes(getSiteText(apiUrl, pageUrl))
+        if (items.isNotEmpty()) {
+            if (episodeCache.size >= MAX_EPISODE_CACHE) episodeCache.clear()
+            episodeCache[newsId] = EpisodeCacheEntry(items, now + EPISODE_CACHE_MS)
+        }
+        return items
     }
 
     private suspend fun loadSource(
@@ -231,12 +291,22 @@ class FrenchMangaProvider : MainAPI() {
         pageUrl: String,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val response = runCatching {
-            app.get(source.url, headers = browserHeaders, referer = pageUrl, timeout = 10L)
+        val sourceOrigin = origin(source.url)
+        val html = runCatching {
+            val first = app.get(source.url, headers = browserHeaders, referer = pageUrl, timeout = 8L)
+            when {
+                first.isSuccessful -> first.text
+                first.code == 403 && sourceOrigin != null -> app.get(
+                    source.url,
+                    headers = browserHeaders,
+                    referer = "$sourceOrigin/",
+                    timeout = 8L
+                ).takeIf { it.isSuccessful }?.text
+                else -> null
+            }
         }.getOrNull() ?: return false
-        val mediaUrls = FrenchMangaPackedPlayerParser.extractMediaUrls(response.text)
+        val mediaUrls = FrenchMangaPackedPlayerParser.extractMediaUrls(html)
         mediaUrls.forEach { mediaUrl ->
-            val sourceOrigin = origin(source.url)
             val streamHeaders = browserHeaders + mapOf("Referer" to source.url) +
                 sourceOrigin?.let { mapOf("Origin" to it) }.orEmpty()
             val quality = resolveQuality(mediaUrl, streamHeaders)
@@ -259,10 +329,10 @@ class FrenchMangaProvider : MainAPI() {
         val inferred = Regex("""(?:^|[^0-9])(2160|1080|720|480|360)p?(?:[^0-9]|$)""")
             .find(url)?.groupValues?.getOrNull(1)?.toIntOrNull()
         if (!url.contains(".m3u8", ignoreCase = true)) return inferred ?: Qualities.Unknown.value
-        val manifestQuality = withTimeoutOrNull(4_000L) {
+        val manifestQuality = withTimeoutOrNull(3_500L) {
             runCatching {
                 FrenchMangaPackedPlayerParser.highestHlsQuality(
-                    app.get(url, headers = headers, timeout = 4L).text
+                    app.get(url, headers = headers, timeout = 3L).text
                 )
             }.getOrNull()
         }
@@ -312,7 +382,7 @@ class FrenchMangaProvider : MainAPI() {
                     candidate,
                     headers = browserHeaders,
                     referer = replaceOrigin(referer, base),
-                    timeout = 12L
+                    timeout = 10L
                 )
             }.getOrNull() ?: continue
             if (response.isSuccessful && response.text.isNotBlank()) {
@@ -356,5 +426,9 @@ class FrenchMangaProvider : MainAPI() {
     private companion object {
         const val PAGE_SIZE = 18
         const val SEASON_BATCH_SIZE = 4
+        const val SOURCE_BATCH_SIZE = 6
+        const val SOURCE_TIMEOUT_MS = 9_000L
+        const val EPISODE_CACHE_MS = 5 * 60 * 1000L
+        const val MAX_EPISODE_CACHE = 80
     }
 }

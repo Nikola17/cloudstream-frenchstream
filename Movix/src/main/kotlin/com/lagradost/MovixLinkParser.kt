@@ -3,6 +3,12 @@ package com.lagradost
 import org.json.JSONArray
 import org.json.JSONObject
 
+internal data class MovixSourceLink(
+    val url: String,
+    val language: String? = null,
+    val qualityLabel: String? = null
+)
+
 internal object MovixLinkParser {
     // VF d'abord (VFF = doublage FR, puis VF, puis VFQ), puis VOSTFR ; la meilleure qualité d'abord dans chaque groupe.
     private val preferredGroups = listOf(
@@ -16,39 +22,63 @@ internal object MovixLinkParser {
         "vostfr"
     )
 
-    fun fstreamMovie(root: JSONObject): List<String> {
-        return linksFromGroups(
+    fun fstreamMovieEntries(root: JSONObject): List<MovixSourceLink> {
+        return entriesFromGroups(
             root.optJSONObject("players"),
             listOf("VFF", "VF", "VFQ", "VOSTFR", "Default")
         )
     }
 
-    fun fstreamTv(root: JSONObject, episode: Int): List<String> {
+    fun fstreamTvEntries(root: JSONObject, episode: Int): List<MovixSourceLink> {
         val languages = root.optJSONObject("episodes")
             ?.optJSONObject(episode.toString())
             ?.optJSONObject("languages")
-        return linksFromGroups(languages)
+        return entriesFromGroups(languages)
     }
 
-    fun customMovie(root: JSONObject): List<String> {
+    fun customMovieEntries(root: JSONObject): List<MovixSourceLink> {
         return linksFromArray(root.optJSONObject("data")?.optJSONArray("links"))
-            .sortedByDescending { it.second }
-            .map { it.first }
+            .sortedByDescending { it.rank }
+            .distinctBy { it.url }
+            .map { MovixSourceLink(it.url, null, it.qualityLabel) }
     }
 
-    fun wiflixMovie(root: JSONObject): List<String> {
-        return linksFromGroups(root.optJSONObject("players"), listOf("vf", "vostfr"))
+    fun wiflixMovieEntries(root: JSONObject): List<MovixSourceLink> {
+        return entriesFromGroups(root.optJSONObject("players"), listOf("vf", "vostfr"))
     }
 
-    fun wiflixTv(root: JSONObject, episode: Int): List<String> {
+    fun wiflixTvEntries(root: JSONObject, episode: Int): List<MovixSourceLink> {
         val groups = root.optJSONObject("episodes")?.optJSONObject(episode.toString())
-        return linksFromGroups(groups, listOf("vf", "vostfr"))
+        return entriesFromGroups(groups, listOf("vf", "vostfr"))
     }
 
-    private fun linksFromGroups(
+    fun fstreamMovie(root: JSONObject): List<String> = fstreamMovieEntries(root).map { it.url }
+
+    fun fstreamTv(root: JSONObject, episode: Int): List<String> = fstreamTvEntries(root, episode).map { it.url }
+
+    fun customMovie(root: JSONObject): List<String> = customMovieEntries(root).map { it.url }
+
+    fun wiflixMovie(root: JSONObject): List<String> = wiflixMovieEntries(root).map { it.url }
+
+    fun wiflixTv(root: JSONObject, episode: Int): List<String> = wiflixTvEntries(root, episode).map { it.url }
+
+    fun languagePriority(language: String?): Int {
+        return when (language?.uppercase()) {
+            "VFF" -> 0
+            "VF" -> 1
+            "VFQ" -> 2
+            "VOSTFR" -> 3
+            "VOENG", "VO" -> 4
+            else -> 5
+        }
+    }
+
+    private data class RankedLink(val url: String, val qualityLabel: String?, val rank: Int)
+
+    private fun entriesFromGroups(
         groups: JSONObject?,
         requestedGroups: List<String>? = null
-    ): List<String> {
+    ): List<MovixSourceLink> {
         if (groups == null) return emptyList()
 
         val available = groups.keys().asSequence().toList()
@@ -56,19 +86,17 @@ internal object MovixLinkParser {
             preferredGroups.filter { it in available } + available.filterNot { it in preferredGroups }
         )
 
-        // Chaque groupe de langue garde son ordre de priorité (VFF/VF avant VOSTFR…),
-        // et dans chaque groupe la meilleure qualité passe en premier.
         val seen = mutableSetOf<String>()
         return groupNames.flatMap { group ->
+            val normalizedLang = group.uppercase().takeUnless { it == "DEFAULT" }
             linksFromArray(groups.optJSONArray(group))
-                .sortedByDescending { it.second }
-                .map { it.first }
-                .filter { seen.add(it) }
+                .sortedByDescending { it.rank }
+                .filter { seen.add(it.url) }
+                .map { MovixSourceLink(it.url, normalizedLang, it.qualityLabel) }
         }
     }
 
-    /** (url, rang de qualité) : les liens les mieux notés passent en premier dans chaque groupe de langue. */
-    private fun linksFromArray(items: JSONArray?): List<Pair<String, Int>> {
+    private fun linksFromArray(items: JSONArray?): List<RankedLink> {
         if (items == null) return emptyList()
 
         return (0 until items.length())
@@ -79,8 +107,8 @@ internal object MovixLinkParser {
                     is JSONObject -> item.optString("url")
                     else -> null
                 }?.trim()?.takeIf { it.startsWith("http://") || it.startsWith("https://") } ?: return@mapNotNull null
-                val label = (item as? JSONObject)?.optString("quality")?.trim().orEmpty()
-                url to MovixMetadata.qualityRankOf(label)
+                val label = (item as? JSONObject)?.optString("quality")?.trim()?.takeIf { it.isNotBlank() }
+                RankedLink(url, label, MovixMetadata.qualityRankOf(label.orEmpty()))
             }
     }
 }
